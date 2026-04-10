@@ -32,18 +32,34 @@ BlackHole is a virtual audio driver that creates a "pipe" between apps. By itsel
 
 1. Install BlackHole: `brew install blackhole-2ch` or download from [existential.audio/blackhole](https://existential.audio/blackhole/)
 2. Open **Audio MIDI Setup** (Cmd+Space → search "Audio MIDI Setup")
-3. Click **+** at the bottom left → **Create Multi-Output Device**
-4. In the right panel, check **both** of these:
+3. **Match sample rates before creating the Multi-Output Device** — this is critical:
+   - Click **BlackHole 2ch** in the left sidebar → set format to **44100 Hz** (bottom right)
+   - Click your **speakers/headphones** → set them to the same **44100 Hz**
+   - If the sample rates don't match, the Multi-Output Device will be **greyed out** and unusable
+4. Click **+** at the bottom left → **Create Multi-Output Device**
+5. In the right panel, check **both** of these:
    - Your speakers/headphones (e.g. "MacBook Air Speakers") — **put this first**
    - **BlackHole 2ch**
-5. Go to **System Settings → Sound → Output** and select **Multi-Output Device** as your system output
-   - This is the critical step — without it, no audio reaches BlackHole
-   - You will still hear audio through your speakers normally
-6. Run on-the-record: `uv run on-the-record start --device "BlackHole 2ch"`
+6. Set the Multi-Output Device as your system output. Pick **one** of these methods:
+   - **Audio MIDI Setup:** Right-click the Multi-Output Device → **"Use This Device For Sound Output"**
+   - **Menu bar:** Hold **Option** and click the volume/sound icon → select Multi-Output Device
+   - **Terminal:** `SwitchAudioSource -s "Multi-Output Device"` (install first: `brew install switchaudio-osx`)
+   - **System Settings:** System Settings → Sound → Output → Multi-Output Device (this can sometimes spin forever — use one of the methods above instead)
+7. Run on-the-record: `uv run on-the-record start --device "BlackHole 2ch"`
 
 > **Note:** The Multi-Output Device does not have a volume slider in the menu bar.
 > Adjust volume through your speakers' own controls or via the Audio MIDI Setup app.
 > When you're done recording, switch your output back to your normal speakers.
+
+#### macOS troubleshooting
+
+| Problem | Cause | Fix |
+|---------|-------|-----|
+| Multi-Output Device is greyed out | Sample rate mismatch between BlackHole and your speakers | Set both to the same sample rate (e.g. 44100 Hz) in Audio MIDI Setup, then delete and recreate the Multi-Output Device |
+| System Settings spins when selecting Multi-Output | Known macOS bug | Use Audio MIDI Setup right-click, Option+click menu bar, or `SwitchAudioSource` in terminal instead |
+| `on-the-record` says all chunks are silent | System output is not set to the Multi-Output Device | Verify with `SwitchAudioSource -c` or run `uv run on-the-record test-audio --device "BlackHole 2ch"` to diagnose |
+| Audio is captured but very quiet | Volume level issue | Audio capture is digital and volume-independent; make sure the app playing audio isn't muted |
+| `no audio device matching 'BlackHole' found` | BlackHole not installed or name mismatch | Run `uv run on-the-record list-devices` to see exact device names |
 
 ## Installation
 
@@ -128,6 +144,18 @@ uv run on-the-record list-devices
 
 Shows all available input and loopback devices so you can pick the right `--device` value.
 
+### Test audio (diagnose issues)
+
+```bash
+# Check if audio is actually flowing through BlackHole (no API key needed)
+uv run on-the-record test-audio --device "BlackHole 2ch"
+
+# Record for 10 seconds instead of the default 5
+uv run on-the-record test-audio --device "BlackHole 2ch" --seconds 10
+```
+
+Reports peak level, RMS level, and whether the silence threshold would be triggered. Use this to verify your Multi-Output Device setup is working before spending API credits.
+
 ### Using `python -m`
 
 ```bash
@@ -149,6 +177,14 @@ Options:
   --diarize               Enable speaker diarization (default)
   --no-diarize            Disable speaker diarization
   --version               Show version
+```
+
+```
+on-the-record test-audio [OPTIONS]
+
+Options:
+  -d, --device NAME       Audio device name (substring match)
+  -s, --seconds SECS      Seconds to record (default: 5)
 ```
 
 ## Output formats
