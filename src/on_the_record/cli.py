@@ -17,7 +17,7 @@ from datetime import datetime
 from pathlib import Path
 
 from on_the_record import __version__
-from on_the_record.audio import AudioRecorder, list_devices
+from on_the_record.audio import AudioRecorder, list_devices, _IS_MACOS
 from on_the_record.config import (
     Config,
     DEFAULT_CHUNK_SECONDS,
@@ -173,11 +173,14 @@ def _cmd_list_devices(args: argparse.Namespace) -> None:
         print("No audio devices found.", file=sys.stderr)
         sys.exit(1)
 
-    print(f"{'Type':<12} {'Name'}")
-    print(f"{'----':<12} {'----'}")
+    print(f"{'Type':<14} {'Name'}")
+    print(f"{'----':<14} {'----'}")
     for dev in devices:
-        kind = "loopback" if dev.is_loopback else "input"
-        print(f"{kind:<12} {dev.name}")
+        if dev.is_loopback:
+            kind = "loopback" if not _IS_MACOS else "virtual"
+        else:
+            kind = "input"
+        print(f"{kind:<14} {dev.name}")
 
 
 # ---------------------------------------------------------------------------

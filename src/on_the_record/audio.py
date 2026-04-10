@@ -12,11 +12,15 @@ import platform
 import struct
 import sys
 import threading
+import warnings
 import wave
 from dataclasses import dataclass, field
 from typing import Generator
 
 import numpy as np
+
+# Suppress soundcard's macOS loopback warning — we handle this ourselves.
+warnings.filterwarnings("ignore", message=".*macOS does not support loopback.*")
 
 try:
     import soundcard as sc
@@ -34,6 +38,17 @@ logger = logging.getLogger("on_the_record.audio")
 # ---------------------------------------------------------------------------
 
 
+# Well-known virtual audio device names used for loopback on macOS.
+_VIRTUAL_DEVICE_KEYWORDS: tuple[str, ...] = (
+    "blackhole",
+    "soundflower",
+    "loopback",
+    "existential",
+)
+
+_IS_MACOS = platform.system() == "Darwin"
+
+
 @dataclass
 class AudioDevice:
     """Simplified representation of an audio device."""
@@ -43,61 +58,115 @@ class AudioDevice:
     is_loopback: bool
 
 
+def _is_virtual_device(name: str) -> bool:
+    """Heuristic: return *True* if *name* looks like a virtual audio device."""
+    lower = name.lower()
+    return any(kw in lower for kw in _VIRTUAL_DEVICE_KEYWORDS)
+
+
 def list_devices() -> list[AudioDevice]:
     """Return all available audio capture devices, including loopbacks.
+
+    On macOS, ``soundcard`` does not support native loopback recording.
+    Virtual audio devices (e.g. BlackHole) appear as regular inputs and
+    are tagged as ``virtual`` so the user knows to select them.
 
     Raises ``RuntimeError`` if soundcard could not be imported (usually means
     no audio subsystem is available).
     """
     _ensure_soundcard()
     devices: list[AudioDevice] = []
+    seen_ids: set[str] = set()
 
-    # Regular microphones
+    # On all platforms, gather regular microphones first.
     for mic in sc.all_microphones(include_loopback=False):
-        devices.append(AudioDevice(name=mic.name, id=mic.id, is_loopback=False))
+        if mic.id in seen_ids:
+            continue
+        seen_ids.add(mic.id)
+        devices.append(
+            AudioDevice(
+                name=mic.name,
+                id=mic.id,
+                # On macOS, flag virtual devices as loopback-capable.
+                is_loopback=_IS_MACOS and _is_virtual_device(mic.name),
+            )
+        )
 
-    # Loopback / monitor sources
+    # Loopback / monitor sources (Linux & Windows).
     for mic in sc.all_microphones(include_loopback=True):
-        # soundcard returns *all* mics when include_loopback=True on some
-        # platforms, so filter to only the ones that are actually loopbacks.
+        if mic.id in seen_ids:
+            continue
+        seen_ids.add(mic.id)
         if mic.isloopback:
             devices.append(AudioDevice(name=mic.name, id=mic.id, is_loopback=True))
 
     return devices
 
 
-def _get_loopback(device_name: str | None = None):
-    """Return a soundcard microphone object for the requested loopback device.
+def _get_capture_device(device_name: str | None = None):
+    """Return a soundcard microphone object for audio capture.
 
-    If *device_name* is ``None``, the default speaker's loopback is used.
+    On Linux/Windows this prefers a true loopback device.  On macOS, where
+    loopback is not natively supported, it falls back to matching a regular
+    input device (e.g. BlackHole) by name.
+
+    If *device_name* is ``None``, the default speaker's loopback is used
+    (Linux/Windows) or a known virtual device is auto-detected (macOS).
     """
     _ensure_soundcard()
 
     if device_name is not None:
-        # Try to find a loopback whose name contains the requested string.
-        for mic in sc.all_microphones(include_loopback=True):
-            if mic.isloopback and device_name.lower() in mic.name.lower():
-                return mic
-        # Fallback: try exact id match.
-        for mic in sc.all_microphones(include_loopback=True):
-            if mic.isloopback and device_name == mic.id:
-                return mic
-        print(
-            f"Error: no loopback device matching '{device_name}' found.\n"
-            "Run 'on-the-record list-devices' to see available devices.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+        return _find_device_by_name(device_name)
 
-    # Default: loopback for the default speaker.
-    default_speaker = sc.default_speaker()
-    if default_speaker is None:
+    # --- No explicit device: auto-detect ---
+
+    if not _IS_MACOS:
+        # Linux / Windows — try default speaker loopback.
+        default_speaker = sc.default_speaker()
+        if default_speaker is not None:
+            loopback = sc.get_microphone(default_speaker.name, include_loopback=True)
+            if loopback is not None:
+                return loopback
         _no_loopback_error()
 
-    loopback = sc.get_microphone(default_speaker.name, include_loopback=True)
-    if loopback is None:
-        _no_loopback_error()
-    return loopback
+    # macOS — auto-detect a virtual audio device.
+    for mic in sc.all_microphones(include_loopback=False):
+        if _is_virtual_device(mic.name):
+            logger.info("Auto-detected virtual device: '%s'", mic.name)
+            return mic
+
+    _no_loopback_error()
+
+
+def _find_device_by_name(device_name: str):
+    """Find a capture device whose name contains *device_name*.
+
+    Searches loopback devices first (Linux/Windows), then falls back to
+    regular inputs (required on macOS).
+    """
+    lower = device_name.lower()
+
+    # 1. True loopback devices.
+    for mic in sc.all_microphones(include_loopback=True):
+        if mic.isloopback and lower in mic.name.lower():
+            return mic
+
+    # 2. Regular input devices (covers macOS virtual devices).
+    for mic in sc.all_microphones(include_loopback=False):
+        if lower in mic.name.lower():
+            return mic
+
+    # 3. Exact id match as last resort.
+    for mic in sc.all_microphones(include_loopback=True):
+        if device_name == mic.id:
+            return mic
+
+    print(
+        f"Error: no audio device matching '{device_name}' found.\n"
+        "Run 'on-the-record list-devices' to see available devices.",
+        file=sys.stderr,
+    )
+    sys.exit(1)
 
 
 def _ensure_soundcard() -> None:
@@ -231,7 +300,7 @@ class AudioRecorder:
         detected but still yielded (with a log message) so the caller can
         decide what to do.
         """
-        loopback = _get_loopback(self.device_name)
+        loopback = _get_capture_device(self.device_name)
         num_frames = self.sample_rate * self.chunk_seconds
         chunk_index = 0
 
