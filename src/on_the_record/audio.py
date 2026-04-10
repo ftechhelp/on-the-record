@@ -325,9 +325,20 @@ class AudioRecorder:
                 # soundcard returns float64 arrays; flatten to 1-D
                 audio = data.flatten().astype(np.float32)
 
-                silent = is_silent(audio, self.silence_threshold)
+                rms = float(np.sqrt(np.mean(audio.astype(np.float64) ** 2)))
+                peak = float(np.max(np.abs(audio)))
+                silent = rms < self.silence_threshold
+
+                logger.info(
+                    "Chunk %d — RMS: %.6f  Peak: %.6f  Threshold: %.6f  %s",
+                    chunk_index,
+                    rms,
+                    peak,
+                    self.silence_threshold,
+                    "SILENT (skipping)" if silent else "OK",
+                )
+
                 if silent:
-                    logger.debug("Chunk %d is silent — skipping", chunk_index)
                     chunk_index += 1
                     continue
 

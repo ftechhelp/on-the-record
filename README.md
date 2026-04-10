@@ -28,12 +28,22 @@ A cross-platform CLI tool that captures all audio playing through your system's 
 
 #### macOS setup (BlackHole)
 
+BlackHole is a virtual audio driver that creates a "pipe" between apps. By itself it doesn't capture speaker output — you need a **Multi-Output Device** to split your audio to both your speakers and BlackHole simultaneously.
+
 1. Install BlackHole: `brew install blackhole-2ch` or download from [existential.audio/blackhole](https://existential.audio/blackhole/)
-2. Open **Audio MIDI Setup** (search in Spotlight)
-3. Click **+** → **Create Multi-Output Device**
-4. Check both your speakers/headphones and **BlackHole 2ch**
-5. Set the Multi-Output Device as your system output
-6. When running on-the-record, select the BlackHole device: `--device BlackHole`
+2. Open **Audio MIDI Setup** (Cmd+Space → search "Audio MIDI Setup")
+3. Click **+** at the bottom left → **Create Multi-Output Device**
+4. In the right panel, check **both** of these:
+   - Your speakers/headphones (e.g. "MacBook Air Speakers") — **put this first**
+   - **BlackHole 2ch**
+5. Go to **System Settings → Sound → Output** and select **Multi-Output Device** as your system output
+   - This is the critical step — without it, no audio reaches BlackHole
+   - You will still hear audio through your speakers normally
+6. Run on-the-record: `uv run on-the-record start --device "BlackHole 2ch"`
+
+> **Note:** The Multi-Output Device does not have a volume slider in the menu bar.
+> Adjust volume through your speakers' own controls or via the Audio MIDI Setup app.
+> When you're done recording, switch your output back to your normal speakers.
 
 ## Installation
 

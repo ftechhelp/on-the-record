@@ -17,7 +17,12 @@ from datetime import datetime
 from pathlib import Path
 
 from on_the_record import __version__
-from on_the_record.audio import AudioRecorder, list_devices, _IS_MACOS
+from on_the_record.audio import (
+    AudioRecorder,
+    list_devices,
+    _IS_MACOS,
+    _get_capture_device,
+)
 from on_the_record.config import (
     Config,
     DEFAULT_CHUNK_SECONDS,
@@ -96,6 +101,12 @@ def _cmd_start(args: argparse.Namespace) -> None:
     logger.info("Chunk size:  %d s", config.chunk_seconds)
     if config.device_name:
         logger.info("Device:      %s", config.device_name)
+    if _IS_MACOS:
+        logger.info(
+            "Tip: Make sure your system output is set to a Multi-Output Device\n"
+            "           that includes both your speakers and BlackHole.\n"
+            "           Otherwise you'll only capture microphone input, not speaker audio."
+        )
     logger.info("Press Ctrl+C to stop recording.\n")
 
     recorder = AudioRecorder(
@@ -184,6 +195,64 @@ def _cmd_list_devices(args: argparse.Namespace) -> None:
 
 
 # ---------------------------------------------------------------------------
+# ``test-audio`` command
+# ---------------------------------------------------------------------------
+
+
+def _cmd_test_audio(args: argparse.Namespace) -> None:
+    """Record a few seconds from a device and report audio levels.
+
+    This helps diagnose whether audio is actually flowing through the
+    selected device — no API key required.
+    """
+    import numpy as np
+
+    device_name = args.device
+    duration = args.seconds
+    sample_rate = DEFAULT_SAMPLE_RATE
+
+    mic = _get_capture_device(device_name)
+    print(f"Recording {duration}s from '{mic.name}' …\n")
+
+    with mic.recorder(samplerate=sample_rate, channels=1) as rec:
+        data = rec.record(numframes=sample_rate * duration)
+
+    audio = data.flatten().astype(np.float32)
+    rms = float(np.sqrt(np.mean(audio.astype(np.float64) ** 2)))
+    peak = float(np.max(np.abs(audio)))
+
+    print(f"  Samples:   {audio.size}")
+    print(f"  Peak:      {peak:.6f}")
+    print(f"  RMS:       {rms:.6f}")
+    print(f"  Threshold: {DEFAULT_SILENCE_THRESHOLD:.6f}")
+    print()
+
+    if peak < 0.000001:
+        print(
+            "RESULT: No audio detected at all — the device is receiving pure silence."
+        )
+        print()
+        if _IS_MACOS:
+            print("This usually means one of:")
+            print("  1. Your system output is NOT set to the Multi-Output Device")
+            print("     Fix: SwitchAudioSource -s 'Multi-Output Device'")
+            print("  2. The Multi-Output Device doesn't include BlackHole")
+            print("     Fix: Open Audio MIDI Setup and check the device config")
+            print("  3. Nothing is actually playing on your system right now")
+    elif rms < DEFAULT_SILENCE_THRESHOLD:
+        print(
+            f"RESULT: Audio detected but very quiet (RMS {rms:.6f} < threshold {DEFAULT_SILENCE_THRESHOLD})."
+        )
+        print("The silence detection would skip this. Try playing louder audio,")
+        print("or lower the threshold with a future --silence-threshold flag.")
+    else:
+        print(
+            f"RESULT: Audio is flowing! RMS {rms:.6f} is above threshold {DEFAULT_SILENCE_THRESHOLD}."
+        )
+        print("You're good to go — run 'on-the-record start' to begin transcribing.")
+
+
+# ---------------------------------------------------------------------------
 # Argument parser
 # ---------------------------------------------------------------------------
 
@@ -251,6 +320,26 @@ def _build_parser() -> argparse.ArgumentParser:
     # -- list-devices --------------------------------------------------------
     ld = sub.add_parser("list-devices", help="List available audio devices.")
     ld.set_defaults(func=_cmd_list_devices)
+
+    # -- test-audio ----------------------------------------------------------
+    ta = sub.add_parser(
+        "test-audio",
+        help="Record a few seconds and report audio levels (no API key needed).",
+    )
+    ta.add_argument(
+        "-d",
+        "--device",
+        default=None,
+        help="Audio device name (substring match).",
+    )
+    ta.add_argument(
+        "-s",
+        "--seconds",
+        type=int,
+        default=5,
+        help="Seconds to record (default: 5).",
+    )
+    ta.set_defaults(func=_cmd_test_audio)
 
     return parser
 
