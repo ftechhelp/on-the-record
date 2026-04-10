@@ -44,10 +44,32 @@ cd on-the-record
 
 # Install with uv
 uv sync
-
-# Or with pip
-pip install .
 ```
+
+After `uv sync`, you have three ways to run the tool:
+
+```bash
+# Option 1: Use uv run (recommended — no activation needed)
+uv run on-the-record start
+
+# Option 2: Activate the virtual environment first
+source .venv/bin/activate   # macOS/Linux
+# .venv\Scripts\activate    # Windows
+on-the-record start
+
+# Option 3: Install globally so it works from anywhere
+uv tool install .
+on-the-record start
+```
+
+<details>
+<summary>Alternative: install with pip</summary>
+
+```bash
+pip install .
+on-the-record start
+```
+</details>
 
 ## Configuration
 
@@ -63,33 +85,35 @@ export OPENAI_API_KEY='sk-...'
 
 ```bash
 # Basic usage — transcribes to ./transcript_<timestamp>.txt
-on-the-record start
+uv run on-the-record start
 
 # Specify output file and format
-on-the-record start --output ~/notes/meeting.md --format md
+uv run on-the-record start --output ~/notes/meeting.md --format md
 
 # Use JSON output
-on-the-record start --output ./call.json --format json
+uv run on-the-record start --output ./call.json --format json
 
 # Custom chunk size (30 seconds)
-on-the-record start --chunk-size 30
+uv run on-the-record start --chunk-size 30
 
 # Use a specific audio device
-on-the-record start --device "BlackHole"
+uv run on-the-record start --device "BlackHole"
 
 # Disable speaker diarization (faster, cheaper)
-on-the-record start --no-diarize
+uv run on-the-record start --no-diarize
 
 # Combine options
-on-the-record start -o ./meeting.md -f md -c 20 -d "BlackHole"
+uv run on-the-record start -o ./meeting.md -f md -c 20 -d "BlackHole"
 ```
+
+> If you activated the venv or installed globally, you can drop the `uv run` prefix.
 
 Press **Ctrl+C** to stop recording. The final chunk will be transcribed before exit.
 
 ### List audio devices
 
 ```bash
-on-the-record list-devices
+uv run on-the-record list-devices
 ```
 
 Shows all available input and loopback devices so you can pick the right `--device` value.
