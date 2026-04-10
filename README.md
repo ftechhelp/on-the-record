@@ -5,6 +5,7 @@ A cross-platform CLI tool that captures all audio playing through your system's 
 ## Features
 
 - Captures system audio via loopback (what you hear through your speakers)
+- **Native macOS support** — uses ScreenCaptureKit on macOS 13+, no virtual audio device needed
 - Speaker diarization — identifies who is speaking
 - Multiple output formats: plain text, Markdown, JSON
 - Configurable chunk size for real-time transcription
@@ -24,7 +25,27 @@ A cross-platform CLI tool that captures all audio playing through your system's 
 |----|---------------|
 | **Windows** | None — WASAPI loopback works natively |
 | **Linux** | None — PulseAudio/PipeWire monitor sources work natively |
-| **macOS** | Install [BlackHole](https://existential.audio/blackhole/) (see below) |
+| **macOS 13+** | None — ScreenCaptureKit captures system audio natively (grant Screen Recording permission when prompted) |
+| **macOS 12 and older** | Install [BlackHole](https://existential.audio/blackhole/) (see below) |
+
+#### macOS 13+ (Ventura and later)
+
+On macOS 13+, on-the-record uses Apple's **ScreenCaptureKit** framework to capture system audio directly. No virtual audio device is needed.
+
+- The first time you run `on-the-record start`, macOS will prompt you to grant **Screen Recording** permission (this is how Apple gates system audio access — even though we only capture audio).
+- Go to **System Settings > Privacy & Security > Screen Recording** and enable access for your terminal app (Terminal, iTerm2, etc.).
+- You will still hear audio through your speakers normally — nothing changes about your audio setup.
+
+```bash
+# Just works — no device selection needed
+uv run on-the-record start
+
+# Test that audio is flowing
+uv run on-the-record test-audio
+```
+
+<details>
+<summary>macOS 12 and older (BlackHole fallback)</summary>
 
 #### macOS setup (BlackHole)
 
@@ -37,9 +58,11 @@ BlackHole is a virtual audio driver that creates a "pipe" between apps. By itsel
    - Click your **speakers/headphones** → set them to the same **44100 Hz**
    - If the sample rates don't match, the Multi-Output Device will be **greyed out** and unusable
 4. Click **+** at the bottom left → **Create Multi-Output Device**
-5. In the right panel, check **both** of these:
-   - Your speakers/headphones (e.g. "MacBook Air Speakers") — **put this first**
-   - **BlackHole 2ch**
+5. In the right panel, check **both** of these — **order matters**:
+   - Check your **speakers/headphones first** (e.g. "MacBook Air Speakers") — this makes them the clock source
+   - Then check **BlackHole 2ch**
+   - Enable **Drift Correction** for BlackHole 2ch (the second device)
+   - The first device checked becomes the clock master and primary audio output — if you don't hear sound, this is probably why
 6. Set the Multi-Output Device as your system output. Pick **one** of these methods:
    - **Audio MIDI Setup:** Right-click the Multi-Output Device → **"Use This Device For Sound Output"**
    - **Menu bar:** Hold **Option** and click the volume/sound icon → select Multi-Output Device
@@ -47,19 +70,23 @@ BlackHole is a virtual audio driver that creates a "pipe" between apps. By itsel
    - **System Settings:** System Settings → Sound → Output → Multi-Output Device (this can sometimes spin forever — use one of the methods above instead)
 7. Run on-the-record: `uv run on-the-record start --device "BlackHole 2ch"`
 
-> **Note:** The Multi-Output Device does not have a volume slider in the menu bar.
-> Adjust volume through your speakers' own controls or via the Audio MIDI Setup app.
-> When you're done recording, switch your output back to your normal speakers.
+> **Note:** The Multi-Output Device **disables the system volume keys** (the menu bar slider disappears).
+> To control volume, open Audio MIDI Setup → click Multi-Output Device → adjust the volume slider
+> next to your speakers. When you're done recording, switch your output back to your normal speakers.
 
-#### macOS troubleshooting
+#### macOS troubleshooting (BlackHole)
 
 | Problem | Cause | Fix |
 |---------|-------|-----|
 | Multi-Output Device is greyed out | Sample rate mismatch between BlackHole and your speakers | Set both to the same sample rate (e.g. 44100 Hz) in Audio MIDI Setup, then delete and recreate the Multi-Output Device |
+| No audio from speakers with Multi-Output | Speakers aren't the clock source, or volume is at zero | In Audio MIDI Setup, delete the Multi-Output Device and recreate it — check your **speakers first**, then BlackHole. Also check the volume slider next to your speakers in the Multi-Output Device config |
+| System volume keys don't work | Expected behavior with Multi-Output Devices | Adjust volume in Audio MIDI Setup → click Multi-Output Device → use the slider next to your speakers |
 | System Settings spins when selecting Multi-Output | Known macOS bug | Use Audio MIDI Setup right-click, Option+click menu bar, or `SwitchAudioSource` in terminal instead |
 | `on-the-record` says all chunks are silent | System output is not set to the Multi-Output Device | Verify with `SwitchAudioSource -c` or run `uv run on-the-record test-audio --device "BlackHole 2ch"` to diagnose |
 | Audio is captured but very quiet | Volume level issue | Audio capture is digital and volume-independent; make sure the app playing audio isn't muted |
 | `no audio device matching 'BlackHole' found` | BlackHole not installed or name mismatch | Run `uv run on-the-record list-devices` to see exact device names |
+
+</details>
 
 ## Installation
 
@@ -240,8 +267,13 @@ uv run on-the-record start
 ## Architecture
 
 ```
-soundcard (loopback capture, 16kHz PCM)
-  -> buffer into N-second chunks
+Audio capture (platform-dependent):
+  macOS 13+:  ScreenCaptureKit (native system audio, no setup)
+  macOS <13:  soundcard + BlackHole virtual device
+  Linux:      soundcard + PulseAudio/PipeWire loopback
+  Windows:    soundcard + WASAPI loopback
+
+  -> buffer into N-second chunks (16kHz PCM)
   -> silence detection (skip quiet chunks)
   -> encode to WAV in-memory
   -> OpenAI gpt-4o-transcribe-diarize API

@@ -1,7 +1,11 @@
 """Audio capture from system loopback devices.
 
-Handles cross-platform loopback audio capture using the ``soundcard`` library,
-silence detection, chunking, and WAV encoding of audio buffers.
+Handles cross-platform audio capture using:
+
+- **ScreenCaptureKit** (macOS 13+) — native system audio capture, no virtual
+  device required.  Falls through to soundcard if unavailable.
+- **soundcard** — cross-platform loopback via PulseAudio/PipeWire (Linux),
+  WASAPI (Windows), or virtual audio devices like BlackHole (macOS < 13).
 """
 
 from __future__ import annotations
@@ -29,6 +33,20 @@ except Exception as exc:  # pragma: no cover – hardware-dependent
     _sc_import_error = exc
 else:
     _sc_import_error = None
+
+# ScreenCaptureKit backend (macOS 13+)
+_sck_available = False
+try:
+    from on_the_record.macos_audio import (
+        is_available as _sck_is_available,
+        import_error as _sck_import_error,
+    )
+
+    _sck_available = _sck_is_available()
+    if _sck_available:
+        from on_the_record.macos_audio import SystemAudioRecorder
+except Exception:  # pragma: no cover
+    _sck_available = False
 
 logger = logging.getLogger("on_the_record.audio")
 
@@ -67,15 +85,30 @@ def _is_virtual_device(name: str) -> bool:
 def list_devices() -> list[AudioDevice]:
     """Return all available audio capture devices, including loopbacks.
 
-    On macOS, ``soundcard`` does not support native loopback recording.
+    On macOS 13+ with ScreenCaptureKit available, a synthetic
+    ``System Audio (ScreenCaptureKit)`` device is listed first — this
+    captures all system audio natively without a virtual device.
+
+    On macOS without ScreenCaptureKit, ``soundcard`` is used instead.
     Virtual audio devices (e.g. BlackHole) appear as regular inputs and
     are tagged as ``virtual`` so the user knows to select them.
 
     Raises ``RuntimeError`` if soundcard could not be imported (usually means
     no audio subsystem is available).
     """
-    _ensure_soundcard()
     devices: list[AudioDevice] = []
+
+    # On macOS 13+, ScreenCaptureKit provides native system audio capture.
+    if _sck_available:
+        devices.append(
+            AudioDevice(
+                name="System Audio (ScreenCaptureKit)",
+                id="screencapturekit",
+                is_loopback=True,
+            )
+        )
+
+    _ensure_soundcard()
     seen_ids: set[str] = set()
 
     # On all platforms, gather regular microphones first.
@@ -181,12 +214,20 @@ def _no_loopback_error() -> None:
     os_name = platform.system()
     hint = ""
     if os_name == "Darwin":
-        hint = (
-            "\nOn macOS you need a virtual audio loopback driver.\n"
-            "Install BlackHole: https://existential.audio/blackhole/\n"
-            "Then create a Multi-Output Device in Audio MIDI Setup that\n"
-            "includes both your speakers and BlackHole."
-        )
+        if _sck_available:
+            hint = (
+                "\nScreenCaptureKit is available but auto-detection failed.\n"
+                "Try running without --device to use system audio capture."
+            )
+        else:
+            hint = (
+                "\nOn macOS you need a virtual audio loopback driver.\n"
+                "Install BlackHole: https://existential.audio/blackhole/\n"
+                "Then create a Multi-Output Device in Audio MIDI Setup that\n"
+                "includes both your speakers and BlackHole.\n"
+                "\nAlternatively, upgrade to macOS 13+ for native system audio\n"
+                "capture via ScreenCaptureKit (no virtual device needed)."
+            )
     elif os_name == "Linux":
         hint = (
             "\nOn Linux, make sure PulseAudio or PipeWire is running.\n"
@@ -299,7 +340,78 @@ class AudioRecorder:
         Each chunk contains ``chunk_seconds`` of audio. Silent chunks are
         detected but still yielded (with a log message) so the caller can
         decide what to do.
+
+        On macOS 13+, prefers ScreenCaptureKit for native system audio
+        capture.  Falls back to soundcard if ScreenCaptureKit is
+        unavailable or the user explicitly chose a soundcard device.
         """
+        use_sck = _sck_available and (
+            self.device_name is None or self.device_name == "screencapturekit"
+        )
+
+        if use_sck:
+            yield from self._record_screencapturekit()
+        else:
+            yield from self._record_soundcard()
+
+    def _record_screencapturekit(self) -> Generator[AudioChunk, None, None]:
+        """Record using ScreenCaptureKit (macOS 13+)."""
+        num_samples = self.sample_rate * self.chunk_seconds
+        chunk_index = 0
+
+        logger.info(
+            "Recording via ScreenCaptureKit at %d Hz, %d-second chunks",
+            self.sample_rate,
+            self.chunk_seconds,
+        )
+
+        sck_recorder = SystemAudioRecorder(
+            sample_rate=self.sample_rate,
+            channels=self.channels,
+        )
+
+        with sck_recorder:
+            while not self._stop_event.is_set():
+                try:
+                    audio = sck_recorder.read_chunk(num_samples)
+                except Exception:
+                    if self._stop_event.is_set():
+                        break
+                    raise
+
+                rms = float(np.sqrt(np.mean(audio.astype(np.float64) ** 2)))
+                peak = float(np.max(np.abs(audio)))
+                silent = rms < self.silence_threshold
+
+                logger.info(
+                    "Chunk %d — RMS: %.6f  Peak: %.6f  Threshold: %.6f  %s",
+                    chunk_index,
+                    rms,
+                    peak,
+                    self.silence_threshold,
+                    "SILENT (skipping)" if silent else "OK",
+                )
+
+                if silent:
+                    chunk_index += 1
+                    continue
+
+                offset = chunk_index * self.chunk_seconds
+                logger.info("Chunk %d captured (%.1f s offset)", chunk_index, offset)
+
+                yield AudioChunk(
+                    audio=audio,
+                    sample_rate=self.sample_rate,
+                    channels=self.channels,
+                    chunk_index=chunk_index,
+                    start_time_offset=offset,
+                )
+                chunk_index += 1
+
+        logger.info("Recording stopped.")
+
+    def _record_soundcard(self) -> Generator[AudioChunk, None, None]:
+        """Record using soundcard (cross-platform fallback)."""
         loopback = _get_capture_device(self.device_name)
         num_frames = self.sample_rate * self.chunk_seconds
         chunk_index = 0

@@ -21,6 +21,7 @@ from on_the_record.audio import (
     AudioRecorder,
     list_devices,
     _IS_MACOS,
+    _sck_available,
     _get_capture_device,
 )
 from on_the_record.config import (
@@ -102,11 +103,17 @@ def _cmd_start(args: argparse.Namespace) -> None:
     if config.device_name:
         logger.info("Device:      %s", config.device_name)
     if _IS_MACOS:
-        logger.info(
-            "Tip: Make sure your system output is set to a Multi-Output Device\n"
-            "           that includes both your speakers and BlackHole.\n"
-            "           Otherwise you'll only capture microphone input, not speaker audio."
-        )
+        if _sck_available:
+            logger.info(
+                "Using ScreenCaptureKit for native system audio capture.\n"
+                "           You may be prompted to grant Screen Recording permission."
+            )
+        else:
+            logger.info(
+                "Tip: Make sure your system output is set to a Multi-Output Device\n"
+                "           that includes both your speakers and BlackHole.\n"
+                "           Otherwise you'll only capture microphone input, not speaker audio."
+            )
     logger.info("Press Ctrl+C to stop recording.\n")
 
     recorder = AudioRecorder(
@@ -187,7 +194,9 @@ def _cmd_list_devices(args: argparse.Namespace) -> None:
     print(f"{'Type':<14} {'Name'}")
     print(f"{'----':<14} {'----'}")
     for dev in devices:
-        if dev.is_loopback:
+        if dev.id == "screencapturekit":
+            kind = "system"
+        elif dev.is_loopback:
             kind = "loopback" if not _IS_MACOS else "virtual"
         else:
             kind = "input"
@@ -211,13 +220,27 @@ def _cmd_test_audio(args: argparse.Namespace) -> None:
     duration = args.seconds
     sample_rate = DEFAULT_SAMPLE_RATE
 
-    mic = _get_capture_device(device_name)
-    print(f"Recording {duration}s from '{mic.name}' …\n")
+    # Use ScreenCaptureKit if available and no explicit non-SCK device chosen.
+    use_sck = _sck_available and (
+        device_name is None or device_name == "screencapturekit"
+    )
 
-    with mic.recorder(samplerate=sample_rate, channels=1) as rec:
-        data = rec.record(numframes=sample_rate * duration)
+    if use_sck:
+        from on_the_record.macos_audio import SystemAudioRecorder
 
-    audio = data.flatten().astype(np.float32)
+        print(f"Recording {duration}s via ScreenCaptureKit …\n")
+        sck = SystemAudioRecorder(sample_rate=sample_rate, channels=1)
+        with sck:
+            audio = sck.read_chunk(sample_rate * duration)
+    else:
+        mic = _get_capture_device(device_name)
+        print(f"Recording {duration}s from '{mic.name}' …\n")
+
+        with mic.recorder(samplerate=sample_rate, channels=1) as rec:
+            data = rec.record(numframes=sample_rate * duration)
+
+        audio = data.flatten().astype(np.float32)
+
     rms = float(np.sqrt(np.mean(audio.astype(np.float64) ** 2)))
     peak = float(np.max(np.abs(audio)))
 
@@ -232,13 +255,16 @@ def _cmd_test_audio(args: argparse.Namespace) -> None:
             "RESULT: No audio detected at all — the device is receiving pure silence."
         )
         print()
-        if _IS_MACOS:
+        if _IS_MACOS and not use_sck:
             print("This usually means one of:")
             print("  1. Your system output is NOT set to the Multi-Output Device")
             print("     Fix: SwitchAudioSource -s 'Multi-Output Device'")
             print("  2. The Multi-Output Device doesn't include BlackHole")
             print("     Fix: Open Audio MIDI Setup and check the device config")
             print("  3. Nothing is actually playing on your system right now")
+        elif _IS_MACOS and use_sck:
+            print("This usually means nothing is playing on your system right now.")
+            print("Try playing some audio and run the test again.")
     elif rms < DEFAULT_SILENCE_THRESHOLD:
         print(
             f"RESULT: Audio detected but very quiet (RMS {rms:.6f} < threshold {DEFAULT_SILENCE_THRESHOLD})."
