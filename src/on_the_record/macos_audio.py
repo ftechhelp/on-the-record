@@ -51,6 +51,7 @@ if platform.system() == "Darwin":
         if major < 13:
             _IMPORT_ERROR = f"macOS 13+ required, got {major}.{minor}"
         else:
+            import objc  # noqa: F401 — PyObjC core
             import ScreenCaptureKit  # noqa: F401 — PyObjC framework
             import CoreMedia  # noqa: F401
             import Quartz  # noqa: F401
@@ -124,7 +125,7 @@ class _AudioStreamOutput(NSObject):
     """
 
     def init(self):  # noqa: D401 — Obj-C naming convention
-        self = super().init()
+        self = objc.super(_AudioStreamOutput, self).init()
         if self is None:
             return None
         self._lock = threading.Lock()

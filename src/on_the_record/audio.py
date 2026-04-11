@@ -45,7 +45,11 @@ try:
     _sck_available = _sck_is_available()
     if _sck_available:
         from on_the_record.macos_audio import SystemAudioRecorder
-except Exception:  # pragma: no cover
+except Exception as _sck_exc:  # pragma: no cover
+    import logging as _logging
+    _logging.getLogger("on_the_record.audio").warning(
+        "ScreenCaptureKit unavailable: %s", _sck_exc
+    )
     _sck_available = False
 
 logger = logging.getLogger("on_the_record.audio")
