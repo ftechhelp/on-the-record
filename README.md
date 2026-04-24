@@ -124,6 +124,20 @@ on-the-record start
 ```
 </details>
 
+## Build a Windows executable
+
+Build the executable on Windows. PyInstaller does not support cross-compiling a working Windows binary from macOS or Linux.
+
+```bash
+# Install the optional build dependency group
+uv sync --group build
+
+# Produce dist/on-the-record.exe
+uv run python scripts/build_windows_exe.py
+```
+
+The generated executable is a console app at `dist/on-the-record.exe` and uses the same `OPENAI_API_KEY` environment variable as the Python version.
+
 ## Configuration
 
 Set your OpenAI API key as an environment variable:
