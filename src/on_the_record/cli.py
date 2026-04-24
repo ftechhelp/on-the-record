@@ -9,6 +9,7 @@ list-devices   Show available audio devices.
 from __future__ import annotations
 
 import argparse
+import importlib
 import logging
 import signal
 import sys
@@ -17,13 +18,6 @@ from datetime import datetime
 from pathlib import Path
 
 from on_the_record import __version__
-from on_the_record.audio import (
-    AudioRecorder,
-    list_devices,
-    _IS_MACOS,
-    _sck_available,
-    _get_capture_device,
-)
 from on_the_record.config import (
     Config,
     DEFAULT_CHUNK_SECONDS,
@@ -37,6 +31,11 @@ from on_the_record.transcribe import transcribe_chunk
 from on_the_record.writer import SUPPORTED_FORMATS, get_writer
 
 logger = logging.getLogger("on_the_record")
+
+
+def _load_audio_module():
+    """Import audio backends only when a command actually needs them."""
+    return importlib.import_module("on_the_record.audio")
 
 
 # ---------------------------------------------------------------------------
@@ -66,6 +65,7 @@ def _setup_logging() -> None:
 def _cmd_start(args: argparse.Namespace) -> None:
     """Main recording + transcription loop."""
     api_key = load_api_key()
+    audio_module = _load_audio_module()
 
     # Resolve output path
     output_path = args.output
@@ -102,8 +102,8 @@ def _cmd_start(args: argparse.Namespace) -> None:
     logger.info("Chunk size:  %d s", config.chunk_seconds)
     if config.device_name:
         logger.info("Device:      %s", config.device_name)
-    if _IS_MACOS:
-        if _sck_available:
+    if audio_module._IS_MACOS:
+        if audio_module._sck_available:
             logger.info(
                 "Using ScreenCaptureKit for native system audio capture.\n"
                 "           You may be prompted to grant Screen Recording permission."
@@ -116,7 +116,7 @@ def _cmd_start(args: argparse.Namespace) -> None:
             )
     logger.info("Press Ctrl+C to stop recording.\n")
 
-    recorder = AudioRecorder(
+    recorder = audio_module.AudioRecorder(
         sample_rate=config.sample_rate,
         channels=config.channels,
         chunk_seconds=config.chunk_seconds,
@@ -186,7 +186,8 @@ def _cmd_start(args: argparse.Namespace) -> None:
 
 def _cmd_list_devices(args: argparse.Namespace) -> None:
     """Print available audio devices."""
-    devices = list_devices()
+    audio_module = _load_audio_module()
+    devices = audio_module.list_devices()
     if not devices:
         print("No audio devices found.", file=sys.stderr)
         sys.exit(1)
@@ -197,7 +198,7 @@ def _cmd_list_devices(args: argparse.Namespace) -> None:
         if dev.id == "screencapturekit":
             kind = "system"
         elif dev.is_loopback:
-            kind = "loopback" if not _IS_MACOS else "virtual"
+            kind = "loopback" if not audio_module._IS_MACOS else "virtual"
         else:
             kind = "input"
         print(f"{kind:<14} {dev.name}")
@@ -216,12 +217,13 @@ def _cmd_test_audio(args: argparse.Namespace) -> None:
     """
     import numpy as np
 
+    audio_module = _load_audio_module()
     device_name = args.device
     duration = args.seconds
     sample_rate = DEFAULT_SAMPLE_RATE
 
     # Use ScreenCaptureKit if available and no explicit non-SCK device chosen.
-    use_sck = _sck_available and (
+    use_sck = audio_module._sck_available and (
         device_name is None or device_name == "screencapturekit"
     )
 
@@ -233,7 +235,7 @@ def _cmd_test_audio(args: argparse.Namespace) -> None:
         with sck:
             audio = sck.read_chunk(sample_rate * duration)
     else:
-        mic = _get_capture_device(device_name)
+        mic = audio_module._get_capture_device(device_name)
         print(f"Recording {duration}s from '{mic.name}' …\n")
 
         with mic.recorder(samplerate=sample_rate, channels=1) as rec:
@@ -255,14 +257,14 @@ def _cmd_test_audio(args: argparse.Namespace) -> None:
             "RESULT: No audio detected at all — the device is receiving pure silence."
         )
         print()
-        if _IS_MACOS and not use_sck:
+        if audio_module._IS_MACOS and not use_sck:
             print("This usually means one of:")
             print("  1. Your system output is NOT set to the Multi-Output Device")
             print("     Fix: SwitchAudioSource -s 'Multi-Output Device'")
             print("  2. The Multi-Output Device doesn't include BlackHole")
             print("     Fix: Open Audio MIDI Setup and check the device config")
             print("  3. Nothing is actually playing on your system right now")
-        elif _IS_MACOS and use_sck:
+        elif audio_module._IS_MACOS and use_sck:
             print("This usually means nothing is playing on your system right now.")
             print("Try playing some audio and run the test again.")
     elif rms < DEFAULT_SILENCE_THRESHOLD:

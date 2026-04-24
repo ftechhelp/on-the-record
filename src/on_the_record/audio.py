@@ -16,12 +16,82 @@ import platform
 import struct
 import sys
 import threading
+import time
 import warnings
 import wave
 from dataclasses import dataclass, field
 from typing import Generator
 
 import numpy as np
+
+
+def _patch_soundcard_windows_numpy_compat(mediafoundation_module=None) -> None:
+    """Patch soundcard's Windows recorder to work with NumPy 2.
+
+    soundcard's WASAPI backend still uses ``numpy.fromstring`` on a raw audio
+    buffer. NumPy 2 removed binary-mode ``fromstring``, so we copy the buffer
+    via ``frombuffer`` before the capture buffer is released.
+    """
+    if platform.system() != "Windows":
+        return
+
+    if mediafoundation_module is None:
+        try:
+            import soundcard.mediafoundation as mediafoundation_module
+        except Exception:
+            return
+
+    recorder_type = getattr(mediafoundation_module, "_Recorder", None)
+    if recorder_type is None:
+        return
+
+    original_record_chunk = getattr(recorder_type, "_record_chunk", None)
+    if original_record_chunk is None or getattr(
+        original_record_chunk, "_on_the_record_numpy2_compat", False
+    ):
+        return
+
+    def _record_chunk(self):
+        while self._capture_available_frames() == 0:
+            if self._idle_start_time is None:
+                self._idle_start_time = time.perf_counter_ns()
+
+            default_block_length, minimum_block_length = self.deviceperiod
+            time.sleep(minimum_block_length / 4)
+            elapsed_time_ns = time.perf_counter_ns() - self._idle_start_time
+            if elapsed_time_ns / 1_000_000_000 > default_block_length * 4:
+                num_frames = int(self.samplerate * elapsed_time_ns / 1_000_000_000)
+                num_channels = len(set(self.channelmap))
+                self._idle_start_time += elapsed_time_ns
+                return np.zeros([num_frames * num_channels], dtype=np.float32)
+
+        self._idle_start_time = None
+        data_ptr, nframes, flags = self._capture_buffer()
+        if data_ptr == mediafoundation_module._ffi.NULL:
+            raise RuntimeError("Could not create capture buffer")
+
+        buffer = mediafoundation_module._ffi.buffer(
+            data_ptr, nframes * 4 * len(set(self.channelmap))
+        )
+        chunk = np.frombuffer(buffer, dtype=np.float32).copy()
+
+        if flags & mediafoundation_module._ole32.AUDCLNT_BUFFERFLAGS_SILENT:
+            chunk[:] = 0
+        if self._is_first_frame:
+            flags &= ~mediafoundation_module._ole32.AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY
+            self._is_first_frame = False
+        if flags & mediafoundation_module._ole32.AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY:
+            mediafoundation_module.warnings.warn(
+                "data discontinuity in recording",
+                mediafoundation_module.SoundcardRuntimeWarning,
+            )
+        if nframes > 0:
+            self._capture_release(nframes)
+            return chunk
+        return np.zeros([0], dtype=np.float32)
+
+    _record_chunk._on_the_record_numpy2_compat = True
+    recorder_type._record_chunk = _record_chunk
 
 # Suppress soundcard's macOS loopback warning — we handle this ourselves.
 warnings.filterwarnings("ignore", message=".*macOS does not support loopback.*")
@@ -33,6 +103,7 @@ except Exception as exc:  # pragma: no cover – hardware-dependent
     _sc_import_error = exc
 else:
     _sc_import_error = None
+    _patch_soundcard_windows_numpy_compat()
 
 # ScreenCaptureKit backend (macOS 13+)
 _sck_available = False

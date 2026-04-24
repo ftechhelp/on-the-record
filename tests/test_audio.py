@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import struct
+import time
+import types
 import wave
 import io
+import warnings
 
 import numpy as np
 import pytest
 
+import on_the_record.audio as audio_module
 from on_the_record.audio import encode_wav, is_silent
 
 
@@ -95,3 +99,60 @@ class TestEncodeWav:
         audio = np.zeros(100, dtype=np.float32)
         wav_bytes = encode_wav(audio, sample_rate=16000)
         assert wav_bytes[:4] == b"RIFF"
+
+
+class TestSoundcardWindowsCompat:
+    def test_patch_replaces_fromstring_path_with_frombuffer_copy(self, monkeypatch):
+        payload = bytearray(np.array([0.25, -0.5], dtype=np.float32).tobytes())
+
+        class FakeFFI:
+            NULL = object()
+
+            @staticmethod
+            def buffer(data_ptr, size):
+                assert size == len(payload)
+                return memoryview(payload)
+
+        class FakeRecorder:
+            def _record_chunk(self):
+                raise AssertionError("patch should replace this method")
+
+            def __init__(self):
+                self._idle_start_time = None
+                self._is_first_frame = True
+                self.channelmap = [0]
+                self.deviceperiod = (0.05, 0.01)
+                self.samplerate = 16000
+                self.released = []
+
+            def _capture_available_frames(self):
+                return 1
+
+            def _capture_buffer(self):
+                return object(), 2, 0
+
+            def _capture_release(self, nframes):
+                self.released.append(nframes)
+
+        fake_mediafoundation = types.SimpleNamespace(
+            _Recorder=FakeRecorder,
+            _ffi=FakeFFI,
+            _ole32=types.SimpleNamespace(
+                AUDCLNT_BUFFERFLAGS_SILENT=0x2,
+                AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY=0x1,
+            ),
+            SoundcardRuntimeWarning=RuntimeWarning,
+            warnings=warnings,
+            time=time,
+        )
+
+        monkeypatch.setattr(audio_module.platform, "system", lambda: "Windows")
+
+        audio_module._patch_soundcard_windows_numpy_compat(fake_mediafoundation)
+
+        recorder = FakeRecorder()
+        chunk = recorder._record_chunk()
+
+        assert np.allclose(chunk, np.array([0.25, -0.5], dtype=np.float32))
+        assert chunk.base is None
+        assert recorder.released == [2]

@@ -143,6 +143,10 @@ The generated executable is a console app at `dist/on-the-record.exe` and uses t
 Set your OpenAI API key as an environment variable:
 
 ```bash
+$env:OPENAI_API_KEY = "sk-..."   # PowerShell
+set OPENAI_API_KEY=sk-...         # cmd.exe
+
+# macOS/Linux
 export OPENAI_API_KEY='sk-...'
 ```
 

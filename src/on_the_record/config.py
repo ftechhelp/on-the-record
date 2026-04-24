@@ -33,6 +33,16 @@ class Config:
     model: str = "gpt-4o-transcribe"
 
 
+def _api_key_setup_hint(os_name: str | None = None) -> str:
+    """Return platform-appropriate environment variable instructions."""
+    if (os_name or os.name) == "nt":
+        return (
+            "PowerShell:  $env:OPENAI_API_KEY = \"sk-...\"\n"
+            "cmd.exe:     set OPENAI_API_KEY=sk-..."
+        )
+    return "export OPENAI_API_KEY='sk-...'"
+
+
 def load_api_key() -> str:
     """Load the OpenAI API key from the environment.
 
@@ -43,7 +53,8 @@ def load_api_key() -> str:
         print(
             "Error: OPENAI_API_KEY environment variable is not set.\n"
             "Get an API key at https://platform.openai.com/api-keys\n"
-            "Then run:  export OPENAI_API_KEY='sk-...'",
+            "Then set it with one of:\n"
+            f"{_api_key_setup_hint()}",
             file=sys.stderr,
         )
         sys.exit(1)

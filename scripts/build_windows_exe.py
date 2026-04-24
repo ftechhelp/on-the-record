@@ -33,6 +33,8 @@ def main() -> int:
         "on-the-record",
         "--paths",
         str(SRC_DIR),
+        "--hidden-import",
+        "on_the_record.audio",
         "--collect-submodules",
         "soundcard",
         "--collect-data",
