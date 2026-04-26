@@ -11,8 +11,10 @@ from __future__ import annotations
 import argparse
 import importlib
 import logging
+import queue
 import signal
 import sys
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -31,6 +33,52 @@ from on_the_record.transcribe import transcribe_chunk
 from on_the_record.writer import SUPPORTED_FORMATS, get_writer
 
 logger = logging.getLogger("on_the_record")
+
+_CAPTURE_COMPLETE = object()
+_CAPTURE_POLL_INTERVAL = 0.1
+
+
+def _queued_chunks(recorder):
+    """Yield recorded chunks while capture continues on a background thread."""
+
+    chunk_queue: queue.Queue[object] = queue.Queue()
+    capture_error: Exception | None = None
+
+    def _capture() -> None:
+        nonlocal capture_error
+
+        try:
+            for chunk in recorder.record():
+                chunk_queue.put(chunk)
+        except Exception as exc:
+            capture_error = exc
+        finally:
+            chunk_queue.put(_CAPTURE_COMPLETE)
+
+    capture_thread = threading.Thread(
+        target=_capture,
+        name="audio-capture",
+        daemon=True,
+    )
+    capture_thread.start()
+
+    try:
+        while True:
+            try:
+                item = chunk_queue.get(timeout=_CAPTURE_POLL_INTERVAL)
+            except queue.Empty:
+                if capture_error is not None and not capture_thread.is_alive():
+                    raise capture_error
+                continue
+
+            if item is _CAPTURE_COMPLETE:
+                if capture_error is not None:
+                    raise capture_error
+                break
+            yield item
+    finally:
+        recorder.stop()
+        capture_thread.join()
 
 
 def _load_audio_module():
@@ -138,7 +186,7 @@ def _cmd_start(args: argparse.Namespace) -> None:
 
     try:
         with writer:
-            for chunk in recorder.record():
+            for chunk in _queued_chunks(recorder):
                 logger.info(
                     "Transcribing chunk %d (offset %.1f s) …",
                     chunk.chunk_index,

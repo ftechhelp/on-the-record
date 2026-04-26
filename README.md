@@ -5,6 +5,7 @@ A cross-platform CLI tool that captures all audio playing through your system's 
 ## Features
 
 - Captures system audio via loopback (what you hear through your speakers)
+- Buffered capture pipeline keeps recording even if transcription falls behind
 - **Native macOS support** — uses ScreenCaptureKit on macOS 13+, no virtual audio device needed
 - Speaker diarization — identifies who is speaking
 - Multiple output formats: plain text, Markdown, JSON
