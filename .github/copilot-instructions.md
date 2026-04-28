@@ -28,5 +28,6 @@ Act as a Python and OS infrastructure audio engineer for this repository. Favor 
 - Read relevant implementation and tests before editing platform audio behavior.
 - Fix root causes rather than masking audio, packaging, or API issues.
 - Keep changes minimal, consistent with existing patterns, and covered by focused tests when behavior changes.
+- Update `README.md` when a change affects user-facing behavior, setup, commands, configuration, build steps, or troubleshooting guidance.
 - Do not remove platform fallbacks just because they are hard to test locally.
 - Do not commit changes or create branches unless explicitly asked.
