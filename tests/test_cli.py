@@ -71,6 +71,9 @@ def _make_args():
         device=None,
         model="gpt-4o-transcribe",
         diarize=False,
+        study_doc=True,
+        study_output=None,
+        gemini_model="gemini-2.5-flash",
     )
 
 
@@ -280,4 +283,156 @@ def test_start_polls_while_waiting_for_first_chunk(monkeypatch):
     thread.join(timeout=2)
 
     assert thread.is_alive() is False
+    assert writer.written == [["chunk-0"]]
+
+
+def test_start_generates_study_document_after_recording(monkeypatch):
+    args = _make_args()
+    writer = _RecordingWriter()
+    generated = {}
+
+    class FakeRecorder:
+        def __init__(self, **kwargs):
+            return None
+
+        def stop(self):
+            return None
+
+        def record(self):
+            yield _FakeChunk(0)
+
+    def fake_transcribe(wav_bytes, *, api_key, model, chunk_offset):
+        return [
+            TranscriptSegment(
+                speaker="Speaker",
+                text=wav_bytes.decode("ascii"),
+                start=chunk_offset,
+                end=chunk_offset + 1,
+            )
+        ]
+
+    fake_audio_module = SimpleNamespace(
+        AudioRecorder=FakeRecorder,
+        _IS_MACOS=False,
+        _sck_available=False,
+    )
+
+    monkeypatch.setattr(cli, "load_api_key", lambda: "test-key")
+    monkeypatch.setattr(cli, "_load_audio_module", lambda: fake_audio_module)
+    monkeypatch.setattr(cli, "get_writer", lambda fmt, path: writer)
+    monkeypatch.setattr(cli, "transcribe_chunk", fake_transcribe)
+    monkeypatch.setattr(cli, "load_gemini_api_key", lambda: "gemini-key")
+    monkeypatch.setattr(cli.signal, "signal", lambda *args, **kwargs: None)
+
+    def fake_write_study_document(transcript_path, output_path, *, api_key, model):
+        generated["transcript_path"] = transcript_path
+        generated["output_path"] = str(output_path)
+        generated["api_key"] = api_key
+        generated["model"] = model
+        return output_path
+
+    monkeypatch.setattr(cli, "write_study_document", fake_write_study_document)
+
+    cli._cmd_start(args)
+
+    assert generated == {
+        "transcript_path": "transcript.txt",
+        "output_path": "transcript_study.md",
+        "api_key": "gemini-key",
+        "model": "gemini-2.5-flash",
+    }
+
+
+def test_start_skips_study_document_without_gemini_key(monkeypatch):
+    args = _make_args()
+    writer = _RecordingWriter()
+
+    class FakeRecorder:
+        def __init__(self, **kwargs):
+            return None
+
+        def stop(self):
+            return None
+
+        def record(self):
+            yield _FakeChunk(0)
+
+    def fake_transcribe(wav_bytes, *, api_key, model, chunk_offset):
+        return [
+            TranscriptSegment(
+                speaker="Speaker",
+                text=wav_bytes.decode("ascii"),
+                start=chunk_offset,
+                end=chunk_offset + 1,
+            )
+        ]
+
+    fake_audio_module = SimpleNamespace(
+        AudioRecorder=FakeRecorder,
+        _IS_MACOS=False,
+        _sck_available=False,
+    )
+
+    monkeypatch.setattr(cli, "load_api_key", lambda: "test-key")
+    monkeypatch.setattr(cli, "_load_audio_module", lambda: fake_audio_module)
+    monkeypatch.setattr(cli, "get_writer", lambda fmt, path: writer)
+    monkeypatch.setattr(cli, "transcribe_chunk", fake_transcribe)
+    monkeypatch.setattr(cli, "load_gemini_api_key", lambda: None)
+    monkeypatch.setattr(cli.signal, "signal", lambda *args, **kwargs: None)
+
+    def fail_write_study_document(*args, **kwargs):
+        raise AssertionError("study document should be skipped without Gemini key")
+
+    monkeypatch.setattr(cli, "write_study_document", fail_write_study_document)
+
+    cli._cmd_start(args)
+
+    assert writer.written == [["chunk-0"]]
+
+
+def test_start_honors_no_study_doc(monkeypatch):
+    args = _make_args()
+    args.study_doc = False
+    writer = _RecordingWriter()
+
+    class FakeRecorder:
+        def __init__(self, **kwargs):
+            return None
+
+        def stop(self):
+            return None
+
+        def record(self):
+            yield _FakeChunk(0)
+
+    def fake_transcribe(wav_bytes, *, api_key, model, chunk_offset):
+        return [
+            TranscriptSegment(
+                speaker="Speaker",
+                text=wav_bytes.decode("ascii"),
+                start=chunk_offset,
+                end=chunk_offset + 1,
+            )
+        ]
+
+    fake_audio_module = SimpleNamespace(
+        AudioRecorder=FakeRecorder,
+        _IS_MACOS=False,
+        _sck_available=False,
+    )
+
+    monkeypatch.setattr(cli, "load_api_key", lambda: "test-key")
+    monkeypatch.setattr(cli, "_load_audio_module", lambda: fake_audio_module)
+    monkeypatch.setattr(cli, "get_writer", lambda fmt, path: writer)
+    monkeypatch.setattr(cli, "transcribe_chunk", fake_transcribe)
+    monkeypatch.setattr(cli, "load_gemini_api_key", lambda: "gemini-key")
+    monkeypatch.setattr(cli.signal, "signal", lambda *args, **kwargs: None)
+
+    def fail_write_study_document(*args, **kwargs):
+        raise AssertionError("study document should be disabled")
+
+    monkeypatch.setattr(cli, "write_study_document", fail_write_study_document)
+
+    cli._cmd_start(args)
+
     assert writer.written == [["chunk-0"]]

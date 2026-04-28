@@ -9,6 +9,7 @@ A cross-platform CLI tool that captures all audio playing through your system's 
 - **Native macOS support** — uses ScreenCaptureKit on macOS 13+, no virtual audio device needed
 - Speaker diarization — identifies who is speaking
 - Multiple output formats: plain text, Markdown, JSON
+- Optional Gemini-generated Markdown study documents after recording stops
 - Configurable chunk size for real-time transcription
 - Silence detection to skip quiet periods and save API costs
 - Graceful start/stop via Ctrl+C
@@ -19,6 +20,7 @@ A cross-platform CLI tool that captures all audio playing through your system's 
 - **[uv](https://docs.astral.sh/uv/)** (recommended) or pip
 - **OpenAI API key** with billing enabled at [platform.openai.com](https://platform.openai.com/api-keys)
   - Note: A ChatGPT Plus subscription does **not** include API credits. You need a separate API key.
+- **Gemini API key** if you want automatic Markdown study documents after recording
 
 ### Platform-specific audio setup
 
@@ -151,6 +153,18 @@ set OPENAI_API_KEY=sk-...         # cmd.exe
 export OPENAI_API_KEY='sk-...'
 ```
 
+To generate a Markdown study document after each recording, also set a Gemini API key:
+
+```bash
+$env:GEMINI_API_KEY = "..."   # PowerShell
+set GEMINI_API_KEY=...         # cmd.exe
+
+# macOS/Linux
+export GEMINI_API_KEY='...'
+```
+
+If `GEMINI_API_KEY` is not set, recording and transcription still work; the study document step is skipped.
+
 ## Usage
 
 ### Start transcribing
@@ -181,6 +195,18 @@ uv run on-the-record start -o ./meeting.md -f md -c 20 -d "BlackHole"
 > If you activated the venv or installed globally, you can drop the `uv run` prefix.
 
 Press **Ctrl+C** to stop recording. The final chunk will be transcribed before exit.
+If `GEMINI_API_KEY` is set, on-the-record then asks Gemini to turn the transcript into a Markdown study document. The default path is `<transcript>_study.md`, for example `transcript_20260428_153834_study.md`.
+
+```bash
+# Write the Gemini study document to a custom path
+uv run on-the-record start --study-output ./study-notes.md
+
+# Disable the Gemini study document for one run
+uv run on-the-record start --no-study-doc
+
+# Use a different Gemini model
+uv run on-the-record start --gemini-model gemini-2.5-pro
+```
 
 ### List audio devices
 
@@ -222,6 +248,10 @@ Options:
   -m, --model MODEL       OpenAI model (default: gpt-4o-transcribe)
   --diarize               Enable speaker diarization (default)
   --no-diarize            Disable speaker diarization
+  --study-doc             Generate a Gemini Markdown study document after recording (default when GEMINI_API_KEY is set)
+  --no-study-doc          Disable Gemini study document generation
+  --study-output PATH     Study document output path (default: <transcript>_study.md)
+  --gemini-model MODEL    Gemini model for study document generation (default: gemini-2.5-flash)
   --version               Show version
 ```
 

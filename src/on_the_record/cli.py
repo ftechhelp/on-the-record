@@ -29,6 +29,12 @@ from on_the_record.config import (
     DEFAULT_SILENCE_THRESHOLD,
     load_api_key,
 )
+from on_the_record.study import (
+    DEFAULT_GEMINI_MODEL,
+    default_study_output_path,
+    load_gemini_api_key,
+    write_study_document,
+)
 from on_the_record.transcribe import transcribe_chunk
 from on_the_record.writer import SUPPORTED_FORMATS, get_writer
 
@@ -36,6 +42,46 @@ logger = logging.getLogger("on_the_record")
 
 _CAPTURE_COMPLETE = object()
 _CAPTURE_POLL_INTERVAL = 0.1
+
+
+def _maybe_generate_study_document(
+    transcript_path: str,
+    *,
+    enabled: bool,
+    output_path: str | None,
+    model: str,
+    total_segments: int,
+) -> None:
+    """Generate a Markdown study document after recording, if configured."""
+    if not enabled:
+        logger.info("Study document generation disabled.")
+        return
+    if total_segments == 0:
+        logger.info("Skipping study document generation because no transcript segments were written.")
+        return
+
+    gemini_api_key = load_gemini_api_key()
+    if gemini_api_key is None:
+        logger.warning(
+            "Skipping study document generation because GEMINI_API_KEY is not set."
+        )
+        return
+
+    study_path = Path(output_path) if output_path else default_study_output_path(transcript_path)
+    logger.info("Generating Gemini study document: %s", study_path)
+
+    try:
+        written_path = write_study_document(
+            transcript_path,
+            study_path,
+            api_key=gemini_api_key,
+            model=model,
+        )
+    except Exception as exc:
+        logger.error("Study document generation failed: %s", exc)
+        return
+
+    logger.info("Study document written to %s", written_path)
 
 
 def _queued_chunks(recorder):
@@ -224,6 +270,13 @@ def _cmd_start(args: argparse.Namespace) -> None:
         elapsed,
         total_segments,
         config.output_path,
+    )
+    _maybe_generate_study_document(
+        config.output_path,
+        enabled=getattr(args, "study_doc", True),
+        output_path=getattr(args, "study_output", None),
+        model=getattr(args, "gemini_model", DEFAULT_GEMINI_MODEL),
+        total_segments=total_segments,
     )
 
 
@@ -425,6 +478,28 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_false",
         dest="diarize",
         help="Disable speaker diarization.",
+    )
+    start.add_argument(
+        "--study-doc",
+        action="store_true",
+        default=True,
+        help="Generate a Gemini Markdown study document after recording (default: enabled when GEMINI_API_KEY is set).",
+    )
+    start.add_argument(
+        "--no-study-doc",
+        action="store_false",
+        dest="study_doc",
+        help="Disable Gemini study document generation.",
+    )
+    start.add_argument(
+        "--study-output",
+        default=None,
+        help="Study document output path. Defaults to <transcript>_study.md.",
+    )
+    start.add_argument(
+        "--gemini-model",
+        default=DEFAULT_GEMINI_MODEL,
+        help=f"Gemini model for study document generation (default: {DEFAULT_GEMINI_MODEL}).",
     )
     start.set_defaults(func=_cmd_start)
 
