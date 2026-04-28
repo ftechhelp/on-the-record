@@ -19,6 +19,7 @@ import threading
 import time
 import warnings
 import wave
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Generator
 
@@ -242,6 +243,46 @@ def _get_capture_device(device_name: str | None = None):
     _no_loopback_error()
 
 
+def _get_microphone_device(exclude_device=None):
+    """Return the default physical microphone for local voice capture."""
+    _ensure_soundcard()
+
+    default_microphone = sc.default_microphone()
+    if _is_usable_microphone(default_microphone, exclude_device):
+        return default_microphone
+
+    for microphone in sc.all_microphones(include_loopback=False):
+        if _is_usable_microphone(microphone, exclude_device):
+            return microphone
+
+    raise RuntimeError(
+        "Could not find a usable microphone to record your voice. "
+        "Check your system input device and run 'on-the-record list-devices'."
+    )
+
+
+def _is_usable_microphone(microphone, exclude_device=None) -> bool:
+    if microphone is None:
+        return False
+    if _same_audio_device(microphone, exclude_device):
+        return False
+    if getattr(microphone, "isloopback", False):
+        return False
+    if _IS_MACOS and _is_virtual_device(getattr(microphone, "name", "")):
+        return False
+    return True
+
+
+def _same_audio_device(left, right) -> bool:
+    if left is None or right is None:
+        return False
+    left_id = getattr(left, "id", None)
+    right_id = getattr(right, "id", None)
+    if left_id is not None and right_id is not None and left_id == right_id:
+        return True
+    return getattr(left, "name", None) == getattr(right, "name", None)
+
+
 def _find_device_by_name(device_name: str):
     """Find a capture device whose name contains *device_name*.
 
@@ -354,6 +395,65 @@ def encode_wav(audio: np.ndarray, sample_rate: int, channels: int = 1) -> bytes:
     return buf.getvalue()
 
 
+def _as_mono_float32(audio: np.ndarray) -> np.ndarray:
+    """Convert recorded audio to a 1-D float32 mono array."""
+    audio = np.asarray(audio)
+    if audio.ndim == 2:
+        audio = audio.mean(axis=1)
+    return audio.astype(np.float32).flatten()
+
+
+def _mix_audio_sources(*sources: np.ndarray) -> np.ndarray:
+    """Mix mono audio sources, padding shorter inputs with silence."""
+    mono_sources = [_as_mono_float32(source) for source in sources if source.size > 0]
+    if not mono_sources:
+        return np.array([], dtype=np.float32)
+
+    target_size = max(source.size for source in mono_sources)
+    aligned_sources: list[np.ndarray] = []
+    for source in mono_sources:
+        if source.size < target_size:
+            source = np.pad(source, (0, target_size - source.size))
+        aligned_sources.append(source)
+
+    mixed = np.sum(aligned_sources, axis=0)
+    return np.clip(mixed, -1.0, 1.0).astype(np.float32)
+
+
+def _record_sources_concurrently(
+    readers: dict[str, Callable[[], np.ndarray]],
+) -> dict[str, np.ndarray]:
+    """Read multiple blocking audio sources at the same time."""
+    results: dict[str, np.ndarray] = {}
+    errors: dict[str, Exception] = {}
+
+    def _read_source(source_name: str, reader: Callable[[], np.ndarray]) -> None:
+        try:
+            results[source_name] = reader()
+        except Exception as exc:
+            errors[source_name] = exc
+
+    threads = [
+        threading.Thread(
+            target=_read_source,
+            args=(source_name, reader),
+            name=f"audio-{source_name}",
+        )
+        for source_name, reader in readers.items()
+    ]
+
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    if errors:
+        source_name, error = next(iter(errors.items()))
+        raise RuntimeError(f"Audio capture failed for {source_name}: {error}") from error
+
+    return results
+
+
 # ---------------------------------------------------------------------------
 # Audio capture / chunking
 # ---------------------------------------------------------------------------
@@ -430,8 +530,11 @@ class AudioRecorder:
         num_samples = self.sample_rate * self.chunk_seconds
         chunk_index = 0
 
+        microphone = _get_microphone_device()
+
         logger.info(
-            "Recording via ScreenCaptureKit at %d Hz, %d-second chunks",
+            "Recording via ScreenCaptureKit plus microphone '%s' at %d Hz, %d-second chunks",
+            microphone.name,
             self.sample_rate,
             self.chunk_seconds,
         )
@@ -441,14 +544,28 @@ class AudioRecorder:
             channels=self.channels,
         )
 
-        with sck_recorder:
+        with sck_recorder, microphone.recorder(
+            samplerate=self.sample_rate, channels=self.channels
+        ) as microphone_recorder:
             while not self._stop_event.is_set():
                 try:
-                    audio = sck_recorder.read_chunk(num_samples)
+                    recordings = _record_sources_concurrently(
+                        {
+                            "system": lambda: sck_recorder.read_chunk(num_samples),
+                            "microphone": lambda: microphone_recorder.record(
+                                numframes=num_samples
+                            ),
+                        }
+                    )
                 except Exception:
                     if self._stop_event.is_set():
                         break
                     raise
+
+                audio = _mix_audio_sources(
+                    recordings["system"],
+                    recordings["microphone"],
+                )
 
                 rms = float(np.sqrt(np.mean(audio.astype(np.float64) ** 2)))
                 peak = float(np.max(np.abs(audio)))
@@ -484,29 +601,42 @@ class AudioRecorder:
     def _record_soundcard(self) -> Generator[AudioChunk, None, None]:
         """Record using soundcard (cross-platform fallback)."""
         loopback = _get_capture_device(self.device_name)
+        microphone = _get_microphone_device(exclude_device=loopback)
         num_frames = self.sample_rate * self.chunk_seconds
         chunk_index = 0
 
         logger.info(
-            "Recording from '%s' at %d Hz, %d-second chunks",
+            "Recording from '%s' plus microphone '%s' at %d Hz, %d-second chunks",
             loopback.name,
+            microphone.name,
             self.sample_rate,
             self.chunk_seconds,
         )
 
         with loopback.recorder(
             samplerate=self.sample_rate, channels=self.channels
-        ) as rec:
+        ) as system_recorder, microphone.recorder(
+            samplerate=self.sample_rate, channels=self.channels
+        ) as microphone_recorder:
             while not self._stop_event.is_set():
                 try:
-                    data = rec.record(numframes=num_frames)
+                    recordings = _record_sources_concurrently(
+                        {
+                            "system": lambda: system_recorder.record(numframes=num_frames),
+                            "microphone": lambda: microphone_recorder.record(
+                                numframes=num_frames
+                            ),
+                        }
+                    )
                 except Exception:
                     if self._stop_event.is_set():
                         break
                     raise
 
-                # soundcard returns float64 arrays; flatten to 1-D
-                audio = data.flatten().astype(np.float32)
+                audio = _mix_audio_sources(
+                    recordings["system"],
+                    recordings["microphone"],
+                )
 
                 rms = float(np.sqrt(np.mean(audio.astype(np.float64) ** 2)))
                 peak = float(np.max(np.abs(audio)))

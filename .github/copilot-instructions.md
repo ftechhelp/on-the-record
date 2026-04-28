@@ -21,6 +21,7 @@ Act as a Python and OS infrastructure audio engineer for this repository. Favor 
 - Install dependencies with `uv sync`; include dev dependencies with `uv sync --group dev`.
 - Run tests with `uv run pytest`, or use a narrower command like `uv run pytest tests/test_audio.py` for focused verification.
 - Build the Windows executable with `uv sync --group build` and `uv run python scripts/build_windows_exe.py`; the output is `dist/on-the-record.exe`.
+- After making code changes, always rebuild the Windows executable before finishing, and report whether the rebuild succeeded or why it could not be run.
 - No lint or type-check command is configured in `pyproject.toml`.
 
 ## Change Discipline

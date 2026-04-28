@@ -13,7 +13,7 @@ import numpy as np
 import pytest
 
 import on_the_record.audio as audio_module
-from on_the_record.audio import encode_wav, is_silent
+from on_the_record.audio import AudioRecorder, encode_wav, is_silent
 
 
 # ---------------------------------------------------------------------------
@@ -156,3 +156,140 @@ class TestSoundcardWindowsCompat:
         assert np.allclose(chunk, np.array([0.25, -0.5], dtype=np.float32))
         assert chunk.base is None
         assert recorder.released == [2]
+
+
+class TestAudioMixing:
+    def test_mix_audio_sources_pads_and_clips(self):
+        system_audio = np.array([0.6, 0.0, -0.2], dtype=np.float32)
+        microphone_audio = np.array([0.5, 0.4], dtype=np.float32)
+
+        mixed = audio_module._mix_audio_sources(system_audio, microphone_audio)
+
+        assert mixed.dtype == np.float32
+        assert np.allclose(mixed, np.array([1.0, 0.4, -0.2], dtype=np.float32))
+
+    def test_get_microphone_device_skips_loopback_and_virtual_devices(self, monkeypatch):
+        loopback = types.SimpleNamespace(
+            name="Speakers Loopback",
+            id="loopback",
+            isloopback=True,
+        )
+        virtual = types.SimpleNamespace(
+            name="BlackHole 2ch",
+            id="blackhole",
+            isloopback=False,
+        )
+        physical = types.SimpleNamespace(
+            name="Built-in Microphone",
+            id="mic",
+            isloopback=False,
+        )
+        fake_soundcard = types.SimpleNamespace(
+            default_microphone=lambda: virtual,
+            all_microphones=lambda include_loopback=False: [loopback, virtual, physical],
+        )
+
+        monkeypatch.setattr(audio_module, "sc", fake_soundcard)
+        monkeypatch.setattr(audio_module, "_IS_MACOS", True)
+
+        assert audio_module._get_microphone_device(exclude_device=loopback) is physical
+
+
+class _FakeRecorderContext:
+    def __init__(self, audio: np.ndarray):
+        self.audio = audio
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return None
+
+    def record(self, numframes: int):
+        return self.audio[:numframes]
+
+
+class _FakeDevice:
+    def __init__(self, name: str, audio: np.ndarray):
+        self.name = name
+        self.id = name.lower().replace(" ", "-")
+        self.isloopback = False
+        self.audio = audio
+
+    def recorder(self, *, samplerate: int, channels: int):
+        return _FakeRecorderContext(self.audio)
+
+
+class TestAudioRecorderMicrophoneMix:
+    def test_soundcard_recording_mixes_loopback_and_microphone(self, monkeypatch):
+        loopback = _FakeDevice(
+            "Speakers Loopback",
+            np.array([[0.2], [0.2], [0.0], [0.0]], dtype=np.float32),
+        )
+        microphone = _FakeDevice(
+            "Built-in Microphone",
+            np.array([[0.0], [0.4], [0.4], [0.0]], dtype=np.float32),
+        )
+
+        monkeypatch.setattr(audio_module, "_get_capture_device", lambda device: loopback)
+        monkeypatch.setattr(
+            audio_module,
+            "_get_microphone_device",
+            lambda exclude_device=None: microphone,
+        )
+
+        recorder = AudioRecorder(sample_rate=4, chunk_seconds=1, silence_threshold=0.0)
+        chunks = recorder._record_soundcard()
+
+        try:
+            chunk = next(chunks)
+        finally:
+            chunks.close()
+
+        assert np.allclose(
+            chunk.audio,
+            np.array([0.2, 0.6, 0.4, 0.0], dtype=np.float32),
+        )
+        assert chunk.chunk_index == 0
+        assert chunk.start_time_offset == 0
+
+    def test_screencapturekit_recording_mixes_system_and_microphone(self, monkeypatch):
+        microphone = _FakeDevice(
+            "Built-in Microphone",
+            np.array([[0.0], [0.5], [0.0], [0.0]], dtype=np.float32),
+        )
+
+        class FakeSystemAudioRecorder:
+            def __init__(self, *, sample_rate: int, channels: int):
+                self.audio = np.array([0.25, 0.0, 0.25, 0.0], dtype=np.float32)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return None
+
+            def read_chunk(self, num_samples: int):
+                return self.audio[:num_samples]
+
+        monkeypatch.setattr(audio_module, "SystemAudioRecorder", FakeSystemAudioRecorder, raising=False)
+        monkeypatch.setattr(
+            audio_module,
+            "_get_microphone_device",
+            lambda exclude_device=None: microphone,
+        )
+
+        recorder = AudioRecorder(sample_rate=4, chunk_seconds=1, silence_threshold=0.0)
+        chunks = recorder._record_screencapturekit()
+
+        try:
+            chunk = next(chunks)
+        finally:
+            chunks.close()
+
+        assert np.allclose(
+            chunk.audio,
+            np.array([0.25, 0.5, 0.25, 0.0], dtype=np.float32),
+        )
+        assert chunk.chunk_index == 0
+        assert chunk.start_time_offset == 0

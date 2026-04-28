@@ -278,18 +278,53 @@ def _cmd_test_audio(args: argparse.Namespace) -> None:
     if use_sck:
         from on_the_record.macos_audio import SystemAudioRecorder
 
-        print(f"Recording {duration}s via ScreenCaptureKit …\n")
+        microphone = audio_module._get_microphone_device()
+        print(
+            f"Recording {duration}s via ScreenCaptureKit plus microphone '{microphone.name}' …\n"
+        )
         sck = SystemAudioRecorder(sample_rate=sample_rate, channels=1)
-        with sck:
-            audio = sck.read_chunk(sample_rate * duration)
+        with sck, microphone.recorder(
+            samplerate=sample_rate, channels=1
+        ) as microphone_recorder:
+            recordings = audio_module._record_sources_concurrently(
+                {
+                    "system": lambda: sck.read_chunk(sample_rate * duration),
+                    "microphone": lambda: microphone_recorder.record(
+                        numframes=sample_rate * duration
+                    ),
+                }
+            )
+        audio = audio_module._mix_audio_sources(
+            recordings["system"],
+            recordings["microphone"],
+        )
     else:
         mic = audio_module._get_capture_device(device_name)
-        print(f"Recording {duration}s from '{mic.name}' …\n")
+        microphone = audio_module._get_microphone_device(exclude_device=mic)
+        print(
+            f"Recording {duration}s from '{mic.name}' plus microphone '{microphone.name}' …\n"
+        )
 
-        with mic.recorder(samplerate=sample_rate, channels=1) as rec:
-            data = rec.record(numframes=sample_rate * duration)
+        with mic.recorder(
+            samplerate=sample_rate, channels=1
+        ) as system_recorder, microphone.recorder(
+            samplerate=sample_rate, channels=1
+        ) as microphone_recorder:
+            recordings = audio_module._record_sources_concurrently(
+                {
+                    "system": lambda: system_recorder.record(
+                        numframes=sample_rate * duration
+                    ),
+                    "microphone": lambda: microphone_recorder.record(
+                        numframes=sample_rate * duration
+                    ),
+                }
+            )
 
-        audio = data.flatten().astype(np.float32)
+        audio = audio_module._mix_audio_sources(
+            recordings["system"],
+            recordings["microphone"],
+        )
 
     rms = float(np.sqrt(np.mean(audio.astype(np.float64) ** 2)))
     peak = float(np.max(np.abs(audio)))

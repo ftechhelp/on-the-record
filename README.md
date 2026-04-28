@@ -4,7 +4,7 @@ A cross-platform CLI tool that captures all audio playing through your system's 
 
 ## Features
 
-- Captures system audio via loopback (what you hear through your speakers)
+- Captures system audio via loopback (what you hear through your speakers) plus your microphone
 - Buffered capture pipeline keeps recording even if transcription falls behind
 - **Native macOS support** — uses ScreenCaptureKit on macOS 13+, no virtual audio device needed
 - Speaker diarization — identifies who is speaking
@@ -156,7 +156,7 @@ export OPENAI_API_KEY='sk-...'
 ### Start transcribing
 
 ```bash
-# Basic usage — transcribes to ./transcript_<timestamp>.txt
+# Basic usage — records system audio plus your microphone and transcribes to ./transcript_<timestamp>.txt
 uv run on-the-record start
 
 # Specify output file and format
