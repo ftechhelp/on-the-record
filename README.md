@@ -194,11 +194,11 @@ uv run on-the-record start --device "BlackHole"
 # Disable speaker diarization (faster, cheaper)
 uv run on-the-record start --no-diarize
 
-# Recognize previously enrolled speakers by local voice profile
-uv run on-the-record start --recognize-speakers
+# Speaker recognition/enrollment runs automatically when the speaker extra is installed
+uv run on-the-record start
 
-# Prompt for unknown speaker names after recording and save local profiles
-uv run on-the-record start --enroll-speakers
+# Disable local speaker recognition or post-recording enrollment prompts
+uv run on-the-record start --no-recognize-speakers --no-enroll-speakers
 
 # Combine options
 uv run on-the-record start -o ./meeting.md -f md -c 20 -d "BlackHole"
@@ -219,19 +219,21 @@ uv sync --extra speaker
 
 On Windows, use Python 3.11 or 3.12 for the `speaker` extra. SpeechBrain currently resolves dependencies that do not install cleanly on Python 3.13 without a local compiler toolchain.
 
-Then enroll speakers during a recording:
+Then start a recording as usual:
 
 ```bash
-uv run on-the-record start --diarize --enroll-speakers --output ./meeting.json --format json
+uv run on-the-record start --diarize --output ./meeting.json --format json
 ```
 
-When recording stops, the tool asks you to name unknown speaker clusters. It stores local voice embeddings and rewrites the transcript with the names you entered. By default, raw audio samples are not retained. To also save one WAV sample for each newly enrolled speaker cluster, pass `--speaker-save-samples`.
+When the speaker extra is installed, the tool automatically uses saved profiles to recognize known speakers. When recording stops, it asks you to name unknown speaker clusters. It stores local voice embeddings and rewrites the transcript with the names you entered. By default, raw audio samples are not retained. To also save one WAV sample for each newly enrolled speaker cluster, pass `--speaker-save-samples`.
 
-Future recordings can use those profiles:
+You can opt out for a run:
 
 ```bash
-uv run on-the-record start --diarize --recognize-speakers
+uv run on-the-record start --no-recognize-speakers --no-enroll-speakers
 ```
+
+If the speaker extra is not installed, `start` continues without speaker recognition unless you explicitly pass `--recognize-speakers` or `--enroll-speakers`, in which case it exits with setup guidance.
 
 Manage saved profiles with:
 
@@ -302,8 +304,10 @@ Options:
   --no-study-doc          Disable Gemini study document generation
   --study-output PATH     Study document output path (default: <transcript>_study.md)
   --gemini-model MODEL    Gemini model for study document generation (default: gemini-2.5-flash)
-  --recognize-speakers    Use local speaker profiles to identify known speakers
-  --enroll-speakers       Prompt for unknown speaker names after recording and save local voice profiles
+  --recognize-speakers    Use local speaker profiles to identify known speakers (default when available)
+  --no-recognize-speakers Disable local speaker profile recognition
+  --enroll-speakers       Prompt for unknown speaker names after recording and save local voice profiles (default when available)
+  --no-enroll-speakers    Disable post-recording speaker enrollment prompts
   --speaker-threshold N   Similarity threshold for saved profile matching (default: 0.78)
   --speaker-profiles PATH Speaker profile directory (default: platform data directory)
   --speaker-save-samples  Save one local WAV sample for each newly enrolled speaker cluster

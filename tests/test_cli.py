@@ -454,6 +454,75 @@ def test_start_honors_no_study_doc(monkeypatch):
     assert writer.written == [["chunk-0"]]
 
 
+def test_start_parser_enables_speaker_features_by_default():
+    parser = cli._build_parser()
+
+    args = parser.parse_args(["start"])
+
+    assert args.recognize_speakers is None
+    assert args.enroll_speakers is None
+
+
+def test_start_parser_can_disable_speaker_features():
+    parser = cli._build_parser()
+
+    args = parser.parse_args(["start", "--no-recognize-speakers", "--no-enroll-speakers"])
+
+    assert args.recognize_speakers is False
+    assert args.enroll_speakers is False
+
+
+def test_default_speaker_session_skips_missing_optional_dependencies(monkeypatch):
+    class FakeUnavailable(RuntimeError):
+        pass
+
+    fake_speaker_module = SimpleNamespace(
+        SpeakerRecognitionUnavailable=FakeUnavailable,
+        SpeakerProfileStore=lambda path: SimpleNamespace(load=lambda: None),
+        create_speaker_backend=lambda: (_ for _ in ()).throw(FakeUnavailable("missing")),
+        DEFAULT_SPEAKER_THRESHOLD=0.78,
+    )
+
+    monkeypatch.setattr(cli, "_load_speaker_recognition_module", lambda: fake_speaker_module)
+
+    session = cli._make_speaker_session(
+        SimpleNamespace(
+            recognize_speakers=None,
+            enroll_speakers=None,
+            speaker_profiles=None,
+            speaker_threshold=0.78,
+            speaker_save_samples=False,
+        )
+    )
+
+    assert session is None
+
+
+def test_explicit_speaker_session_errors_when_dependencies_missing(monkeypatch):
+    class FakeUnavailable(RuntimeError):
+        pass
+
+    fake_speaker_module = SimpleNamespace(
+        SpeakerRecognitionUnavailable=FakeUnavailable,
+        SpeakerProfileStore=lambda path: SimpleNamespace(load=lambda: None),
+        create_speaker_backend=lambda: (_ for _ in ()).throw(FakeUnavailable("missing")),
+        DEFAULT_SPEAKER_THRESHOLD=0.78,
+    )
+
+    monkeypatch.setattr(cli, "_load_speaker_recognition_module", lambda: fake_speaker_module)
+
+    with pytest.raises(SystemExit):
+        cli._make_speaker_session(
+            SimpleNamespace(
+                recognize_speakers=True,
+                enroll_speakers=None,
+                speaker_profiles=None,
+                speaker_threshold=0.78,
+                speaker_save_samples=False,
+            )
+        )
+
+
 def test_start_applies_known_speaker_names_while_streaming(monkeypatch):
     args = _make_args()
     args.recognize_speakers = True

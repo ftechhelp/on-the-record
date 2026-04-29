@@ -157,9 +157,16 @@ def _replace_speaker(segment: TranscriptSegment, speaker: str) -> TranscriptSegm
     )
 
 
+def _speaker_feature_enabled(value: bool | None) -> bool:
+    """Return whether a speaker feature is enabled by default or flag."""
+    return value is not False
+
+
 def _make_speaker_session(args: argparse.Namespace):
     """Create the optional speaker-recognition session for ``start``."""
-    if not (getattr(args, "recognize_speakers", False) or getattr(args, "enroll_speakers", False)):
+    recognize_speakers = _speaker_feature_enabled(getattr(args, "recognize_speakers", None))
+    enroll_speakers = _speaker_feature_enabled(getattr(args, "enroll_speakers", None))
+    if not (recognize_speakers or enroll_speakers):
         return None
 
     speaker_recognition = _load_speaker_recognition_module()
@@ -169,6 +176,14 @@ def _make_speaker_session(args: argparse.Namespace):
     try:
         backend = speaker_recognition.create_speaker_backend()
     except speaker_recognition.SpeakerRecognitionUnavailable as exc:
+        explicitly_requested = (
+            getattr(args, "recognize_speakers", None) is True
+            or getattr(args, "enroll_speakers", None) is True
+        )
+        if not explicitly_requested:
+            logger.warning("Speaker recognition unavailable; continuing without it. %s", exc)
+            return None
+
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
 
@@ -341,7 +356,7 @@ def _cmd_start(args: argparse.Namespace) -> None:
         total_segments,
         config.output_path,
     )
-    if speaker_session is not None and getattr(args, "enroll_speakers", False):
+    if speaker_session is not None and _speaker_feature_enabled(getattr(args, "enroll_speakers", None)):
         if sys.stdin.isatty():
             speaker_mapping = speaker_session.prompt_for_unknowns(output=sys.stderr)
             if speaker_mapping:
@@ -639,12 +654,26 @@ def _build_parser() -> argparse.ArgumentParser:
     start.add_argument(
         "--recognize-speakers",
         action="store_true",
+        default=None,
         help="Use local speaker profiles to identify known speakers.",
+    )
+    start.add_argument(
+        "--no-recognize-speakers",
+        action="store_false",
+        dest="recognize_speakers",
+        help="Disable local speaker profile recognition.",
     )
     start.add_argument(
         "--enroll-speakers",
         action="store_true",
+        default=None,
         help="Prompt for unknown speaker names after recording and save local voice profiles.",
+    )
+    start.add_argument(
+        "--no-enroll-speakers",
+        action="store_false",
+        dest="enroll_speakers",
+        help="Disable post-recording speaker enrollment prompts.",
     )
     start.add_argument(
         "--speaker-threshold",
