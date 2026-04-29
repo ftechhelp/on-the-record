@@ -147,6 +147,8 @@ The generated executable is a console app at `dist/on-the-record.exe` and uses t
 
 The executable bundles the SpeechBrain/Torch speaker-recognition stack and the ECAPA speaker model, so `--recognize-speakers` and `--enroll-speakers` work from the exe without a separate Python environment.
 
+If a project-root `.env` file exists when you build, it is bundled into `dist/on-the-record.exe`. Rebuild the exe after changing `.env` values that you want embedded.
+
 ## Configuration
 
 Set your OpenAI API key as an environment variable:
@@ -158,6 +160,15 @@ set OPENAI_API_KEY=sk-...         # cmd.exe
 # macOS/Linux
 export OPENAI_API_KEY='sk-...'
 ```
+
+You can also put runtime keys in a project-root `.env` file:
+
+```dotenv
+OPENAI_API_KEY=sk-...
+GEMINI_API_KEY=...
+```
+
+Real environment variables take precedence over `.env` values. When running the exe, on-the-record also checks for a sidecar `.env` next to the exe and then for a `.env` bundled at build time. Keep `.env` private; embedding it in the exe also embeds those secrets in the binary.
 
 To generate a Markdown study document after each recording, also set a Gemini API key:
 

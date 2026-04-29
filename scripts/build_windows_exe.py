@@ -13,6 +13,7 @@ SRC_DIR = PROJECT_ROOT / "src"
 ENTRYPOINT = SRC_DIR / "on_the_record" / "__main__.py"
 EXE_PATH = PROJECT_ROOT / "dist" / "on-the-record.exe"
 SPEAKER_MODEL_DIR = PROJECT_ROOT / "build" / "speechbrain-model"
+ENV_FILE = PROJECT_ROOT / ".env"
 
 
 def _prepare_speaker_model() -> None:
@@ -49,6 +50,11 @@ def main() -> int:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
 
+    env_data_args: list[str] = []
+    if ENV_FILE.is_file():
+        print("Bundling project .env into the executable.")
+        env_data_args = ["--add-data", f"{ENV_FILE};."]
+
     command = [
         sys.executable,
         "-m",
@@ -74,6 +80,7 @@ def main() -> int:
         "torchaudio",
         "--add-data",
         f"{SPEAKER_MODEL_DIR};speechbrain-model",
+        *env_data_args,
         "--collect-all",
         "speechbrain",
         "--collect-all",

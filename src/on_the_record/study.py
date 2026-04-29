@@ -9,12 +9,15 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
+from on_the_record.config import load_dotenv
+
 DEFAULT_GEMINI_MODEL = "gemini-3-flash-preview"
 _GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 
 
 def load_gemini_api_key() -> str | None:
     """Return the Gemini API key if configured."""
+    load_dotenv()
     key = os.environ.get("GEMINI_API_KEY", "").strip()
     return key or None
 

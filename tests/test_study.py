@@ -32,8 +32,9 @@ def test_default_study_output_path_uses_markdown_suffix():
     ) / "transcript_study.md"
 
 
-def test_load_gemini_api_key_returns_none_when_unset(monkeypatch):
+def test_load_gemini_api_key_returns_none_when_unset(tmp_path, monkeypatch):
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.chdir(tmp_path)
 
     assert study.load_gemini_api_key() is None
 
