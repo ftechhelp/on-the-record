@@ -8,6 +8,7 @@ A cross-platform CLI tool that captures all audio playing through your system's 
 - Buffered capture pipeline keeps recording even if transcription falls behind
 - **Native macOS support** — uses ScreenCaptureKit on macOS 13+, no virtual audio device needed
 - Speaker diarization — identifies who is speaking
+- Optional local speaker recognition — remember named speakers across recordings
 - Multiple output formats: plain text, Markdown, JSON
 - Optional Gemini-generated Markdown study documents after recording stops
 - Configurable chunk size for real-time transcription
@@ -100,6 +101,9 @@ cd on-the-record
 
 # Install with uv
 uv sync
+
+# Optional: install local speaker-recognition dependencies
+uv sync --extra speaker
 ```
 
 After `uv sync`, you have three ways to run the tool:
@@ -140,6 +144,8 @@ uv run python scripts/build_windows_exe.py
 ```
 
 The generated executable is a console app at `dist/on-the-record.exe` and uses the same `OPENAI_API_KEY` environment variable as the Python version.
+
+The default executable does not bundle the optional SpeechBrain/Torch speaker-recognition stack. Use the Python/uv workflow with `uv sync --extra speaker` for `--recognize-speakers` and `--enroll-speakers`.
 
 ## Configuration
 
@@ -188,6 +194,12 @@ uv run on-the-record start --device "BlackHole"
 # Disable speaker diarization (faster, cheaper)
 uv run on-the-record start --no-diarize
 
+# Recognize previously enrolled speakers by local voice profile
+uv run on-the-record start --recognize-speakers
+
+# Prompt for unknown speaker names after recording and save local profiles
+uv run on-the-record start --enroll-speakers
+
 # Combine options
 uv run on-the-record start -o ./meeting.md -f md -c 20 -d "BlackHole"
 ```
@@ -196,6 +208,44 @@ uv run on-the-record start -o ./meeting.md -f md -c 20 -d "BlackHole"
 
 Press **Ctrl+C** to stop recording. The final chunk will be transcribed before exit.
 If `GEMINI_API_KEY` is set, on-the-record then asks Gemini to turn the transcript into a Markdown study document. The default path is `<transcript>_study.md`, for example `transcript_20260428_153834_study.md`.
+
+### Remembering speakers across recordings
+
+Speaker recognition is optional and local. Install the extra dependencies first:
+
+```bash
+uv sync --extra speaker
+```
+
+On Windows, use Python 3.11 or 3.12 for the `speaker` extra. SpeechBrain currently resolves dependencies that do not install cleanly on Python 3.13 without a local compiler toolchain.
+
+Then enroll speakers during a recording:
+
+```bash
+uv run on-the-record start --diarize --enroll-speakers --output ./meeting.json --format json
+```
+
+When recording stops, the tool asks you to name unknown speaker clusters. It stores local voice embeddings and rewrites the transcript with the names you entered. By default, raw audio samples are not retained. To also save one WAV sample for each newly enrolled speaker cluster, pass `--speaker-save-samples`.
+
+Future recordings can use those profiles:
+
+```bash
+uv run on-the-record start --diarize --recognize-speakers
+```
+
+Manage saved profiles with:
+
+```bash
+uv run on-the-record speakers list
+uv run on-the-record speakers rename <profile-id-or-name> "New Name"
+uv run on-the-record speakers remove <profile-id-or-name>
+```
+
+Profiles are stored in a platform data directory by default, such as `%APPDATA%\on-the-record\speakers` on Windows. You can override the location with `--speaker-profiles PATH` on both `start` and `speakers` commands.
+
+Speaker recognition uses local embeddings and conservative matching. It can still be wrong when audio overlaps, a voice is distorted by speakers/headphones, or a person is recorded through a different audio path. Use `--speaker-threshold` to adjust match strictness.
+
+> **Privacy note:** Voice embeddings and optional WAV samples are biometric-adjacent local data. Get consent before enrolling other people, and remove profiles you no longer need with `on-the-record speakers remove`.
 
 ```bash
 # Write the Gemini study document to a custom path
@@ -252,7 +302,21 @@ Options:
   --no-study-doc          Disable Gemini study document generation
   --study-output PATH     Study document output path (default: <transcript>_study.md)
   --gemini-model MODEL    Gemini model for study document generation (default: gemini-2.5-flash)
+  --recognize-speakers    Use local speaker profiles to identify known speakers
+  --enroll-speakers       Prompt for unknown speaker names after recording and save local voice profiles
+  --speaker-threshold N   Similarity threshold for saved profile matching (default: 0.78)
+  --speaker-profiles PATH Speaker profile directory (default: platform data directory)
+  --speaker-save-samples  Save one local WAV sample for each newly enrolled speaker cluster
   --version               Show version
+```
+
+```
+on-the-record speakers [--speaker-profiles PATH] COMMAND
+
+Commands:
+  list                    List saved speaker profiles
+  rename PROFILE NAME     Rename a saved speaker profile
+  remove PROFILE          Remove a saved speaker profile
 ```
 
 ```

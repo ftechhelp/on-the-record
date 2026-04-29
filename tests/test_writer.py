@@ -15,6 +15,7 @@ from on_the_record.writer import (
     get_writer,
     SUPPORTED_FORMATS,
     _format_timestamp,
+    rewrite_segments,
 )
 
 
@@ -166,3 +167,34 @@ class TestGetWriter:
         with get_writer("txt", out) as w:
             w.write_segments(_make_segments())
         assert out.exists()
+
+
+class TestRewriteSegments:
+    def test_rewrites_existing_text_output(self, tmp_path: Path):
+        out = tmp_path / "test.txt"
+        out.write_text("old content\n", encoding="utf-8")
+
+        rewrite_segments("txt", out, _make_segments()[:1])
+
+        assert out.read_text(encoding="utf-8") == "[00:00:00] Alice: Hello there.\n"
+
+    def test_rewrites_existing_markdown_output(self, tmp_path: Path):
+        out = tmp_path / "test.md"
+        out.write_text("old content\n", encoding="utf-8")
+
+        rewrite_segments("md", out, _make_segments()[:1])
+
+        content = out.read_text(encoding="utf-8")
+        assert content.startswith("# Transcript")
+        assert content.count("# Transcript") == 1
+        assert "**Alice**" in content
+
+    def test_rewrites_existing_json_output(self, tmp_path: Path):
+        out = tmp_path / "test.json"
+        out.write_text("[]\n", encoding="utf-8")
+
+        rewrite_segments("json", out, _make_segments()[:1])
+
+        data = json.loads(out.read_text(encoding="utf-8"))
+        assert len(data) == 1
+        assert data[0]["speaker"] == "Alice"

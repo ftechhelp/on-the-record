@@ -175,3 +175,13 @@ def get_writer(fmt: str, path: str | Path) -> TranscriptWriter:
             f"Supported formats: {', '.join(SUPPORTED_FORMATS)}"
         )
     return cls(path)
+
+
+def rewrite_segments(fmt: str, path: str | Path, segments: list[TranscriptSegment]) -> None:
+    """Replace *path* with *segments* using the selected transcript format."""
+    output_path = Path(path)
+    if output_path.exists():
+        output_path.unlink()
+
+    with get_writer(fmt, output_path) as writer:
+        writer.write_segments(segments)

@@ -6,6 +6,7 @@ import threading
 import time
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 from on_the_record import cli
@@ -52,6 +53,7 @@ class _FakeChunk:
 class _RecordingWriter:
     def __init__(self):
         self.written: list[list[str]] = []
+        self.speakers: list[list[str]] = []
 
     def __enter__(self):
         return self
@@ -61,6 +63,7 @@ class _RecordingWriter:
 
     def write_segments(self, segments):
         self.written.append([segment.text for segment in segments])
+        self.speakers.append([segment.speaker for segment in segments])
 
 
 def _make_args():
@@ -74,7 +77,20 @@ def _make_args():
         study_doc=True,
         study_output=None,
         gemini_model="gemini-2.5-flash",
+        recognize_speakers=False,
+        enroll_speakers=False,
+        speaker_threshold=0.78,
+        speaker_profiles=None,
+        speaker_save_samples=False,
     )
+
+
+class _AudioFakeChunk(_FakeChunk):
+    def __init__(self, chunk_index: int):
+        super().__init__(chunk_index)
+        self.audio = np.ones(15 * 16_000, dtype=np.float32)
+        self.sample_rate = 16_000
+        self.channels = 1
 
 
 def test_start_keeps_capturing_while_transcribing(monkeypatch):
@@ -436,3 +452,117 @@ def test_start_honors_no_study_doc(monkeypatch):
     cli._cmd_start(args)
 
     assert writer.written == [["chunk-0"]]
+
+
+def test_start_applies_known_speaker_names_while_streaming(monkeypatch):
+    args = _make_args()
+    args.recognize_speakers = True
+    writer = _RecordingWriter()
+
+    class FakeRecorder:
+        def __init__(self, **kwargs):
+            return None
+
+        def stop(self):
+            return None
+
+        def record(self):
+            yield _AudioFakeChunk(0)
+
+    class FakeSpeakerSession:
+        def resolve_segment(self, **kwargs):
+            assert kwargs["speaker_label"] == "Speaker 1"
+            assert kwargs["audio"].size == 16_000
+            return "Alice"
+
+    def fake_transcribe(wav_bytes, *, api_key, model, chunk_offset):
+        return [
+            TranscriptSegment(
+                speaker="Speaker 1",
+                text="hello",
+                start=chunk_offset,
+                end=chunk_offset + 1,
+            )
+        ]
+
+    fake_audio_module = SimpleNamespace(
+        AudioRecorder=FakeRecorder,
+        _IS_MACOS=False,
+        _sck_available=False,
+    )
+
+    monkeypatch.setattr(cli, "load_api_key", lambda: "test-key")
+    monkeypatch.setattr(cli, "_load_audio_module", lambda: fake_audio_module)
+    monkeypatch.setattr(cli, "_make_speaker_session", lambda args: FakeSpeakerSession())
+    monkeypatch.setattr(cli, "get_writer", lambda fmt, path: writer)
+    monkeypatch.setattr(cli, "transcribe_chunk", fake_transcribe)
+    monkeypatch.setattr(cli.signal, "signal", lambda *args, **kwargs: None)
+
+    cli._cmd_start(args)
+
+    assert writer.speakers == [["Alice"]]
+
+
+def test_start_enrolls_unknown_speakers_and_rewrites_before_study(monkeypatch):
+    args = _make_args()
+    args.enroll_speakers = True
+    writer = _RecordingWriter()
+    order = []
+
+    class FakeRecorder:
+        def __init__(self, **kwargs):
+            return None
+
+        def stop(self):
+            return None
+
+        def record(self):
+            yield _AudioFakeChunk(0)
+
+    class FakeSpeakerSession:
+        def resolve_segment(self, **kwargs):
+            return "Unknown Speaker 1"
+
+        def prompt_for_unknowns(self, *, output=None):
+            order.append("prompt")
+            return {"Unknown Speaker 1": "Bob"}
+
+    def fake_transcribe(wav_bytes, *, api_key, model, chunk_offset):
+        return [
+            TranscriptSegment(
+                speaker="Speaker 1",
+                text="hello",
+                start=chunk_offset,
+                end=chunk_offset + 1,
+            )
+        ]
+
+    def fake_rewrite_segments(fmt, path, segments):
+        order.append("rewrite")
+        assert segments[0].speaker == "Bob"
+
+    def fake_write_study_document(transcript_path, output_path, *, api_key, model):
+        order.append("study")
+        return output_path
+
+    fake_audio_module = SimpleNamespace(
+        AudioRecorder=FakeRecorder,
+        _IS_MACOS=False,
+        _sck_available=False,
+    )
+
+    monkeypatch.setattr(cli, "load_api_key", lambda: "test-key")
+    monkeypatch.setattr(cli, "_load_audio_module", lambda: fake_audio_module)
+    monkeypatch.setattr(cli, "_make_speaker_session", lambda args: FakeSpeakerSession())
+    monkeypatch.setattr(cli, "get_writer", lambda fmt, path: writer)
+    monkeypatch.setattr(cli, "rewrite_segments", fake_rewrite_segments)
+    monkeypatch.setattr(cli, "transcribe_chunk", fake_transcribe)
+    monkeypatch.setattr(cli, "load_gemini_api_key", lambda: "gemini-key")
+    monkeypatch.setattr(cli, "write_study_document", fake_write_study_document)
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(cli.signal, "signal", lambda *args, **kwargs: None)
+
+    cli._cmd_start(args)
+
+    assert writer.speakers == [["Unknown Speaker 1"]]
+    assert order == ["prompt", "rewrite", "study"]
