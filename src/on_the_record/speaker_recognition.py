@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import sys
 import wave
 import uuid
 from dataclasses import dataclass, field
@@ -19,6 +20,7 @@ DEFAULT_SPEAKER_THRESHOLD = 0.78
 DEFAULT_CLUSTER_THRESHOLD = 0.72
 DEFAULT_MIN_SEGMENT_SECONDS = 1.0
 DEFAULT_SPEAKER_MODEL = "speechbrain/spkrec-ecapa-voxceleb"
+BUNDLED_SPEAKER_MODEL_DIR = "speechbrain-model"
 
 
 class SpeakerRecognitionUnavailable(RuntimeError):
@@ -263,11 +265,23 @@ class SpeechBrainEmbeddingBackend:
                 "Install them with `uv sync --extra speaker`. On Windows, use Python 3.11 or 3.12."
             ) from exc
 
+        bundled_model_dir = _bundled_speaker_model_dir()
+        model_source = str(bundled_model_dir) if bundled_model_dir else model
+        model_savedir = bundled_model_dir or savedir or Path.home() / ".cache" / "on-the-record" / "speechbrain"
+        local_strategy = LocalStrategy.NO_LINK if bundled_model_dir else LocalStrategy.COPY_SKIP_CACHE
+        overrides = {"pretrained_path": str(model_savedir)} if bundled_model_dir else None
+
         self._torch = torch
+        classifier_kwargs = {
+            "source": model_source,
+            "savedir": str(model_savedir),
+            "local_strategy": local_strategy,
+        }
+        if overrides is not None:
+            classifier_kwargs["overrides"] = overrides
+
         self._classifier = EncoderClassifier.from_hparams(
-            source=model,
-            savedir=str(savedir or Path.home() / ".cache" / "on-the-record" / "speechbrain"),
-            local_strategy=LocalStrategy.COPY_SKIP_CACHE,
+            **classifier_kwargs,
         )
 
     def embed(self, audio: np.ndarray, sample_rate: int) -> list[float]:
@@ -405,3 +419,13 @@ class SpeakerRecognitionSession:
 def create_speaker_backend() -> SpeakerEmbeddingBackend:
     """Create the default optional speaker embedding backend."""
     return SpeechBrainEmbeddingBackend()
+
+
+def _bundled_speaker_model_dir() -> Path | None:
+    """Return the PyInstaller-bundled SpeechBrain model directory, if present."""
+    bundle_root = getattr(sys, "_MEIPASS", None)
+    if not bundle_root:
+        return None
+
+    model_dir = Path(bundle_root) / BUNDLED_SPEAKER_MODEL_DIR
+    return model_dir if (model_dir / "hyperparams.yaml").exists() else None

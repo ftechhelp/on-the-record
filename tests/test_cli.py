@@ -635,3 +635,40 @@ def test_start_enrolls_unknown_speakers_and_rewrites_before_study(monkeypatch):
 
     assert writer.speakers == [["Unknown Speaker 1"]]
     assert order == ["prompt", "rewrite", "study"]
+
+
+def test_speakers_test_backend_reports_embedding_dimensions(monkeypatch, capsys):
+    class FakeBackend:
+        def embed(self, audio, sample_rate):
+            assert audio.shape == (16_000,)
+            assert sample_rate == 16_000
+            return [0.1, 0.2, 0.3]
+
+    class FakeUnavailable(RuntimeError):
+        pass
+
+    fake_speaker_module = SimpleNamespace(
+        SpeakerRecognitionUnavailable=FakeUnavailable,
+        create_speaker_backend=lambda: FakeBackend(),
+    )
+
+    monkeypatch.setattr(cli, "_load_speaker_recognition_module", lambda: fake_speaker_module)
+
+    cli._cmd_speakers_test_backend(SimpleNamespace())
+
+    assert capsys.readouterr().out == "Speaker backend OK: embedding dimensions=3\n"
+
+
+def test_speakers_test_backend_errors_when_unavailable(monkeypatch):
+    class FakeUnavailable(RuntimeError):
+        pass
+
+    fake_speaker_module = SimpleNamespace(
+        SpeakerRecognitionUnavailable=FakeUnavailable,
+        create_speaker_backend=lambda: (_ for _ in ()).throw(FakeUnavailable("missing")),
+    )
+
+    monkeypatch.setattr(cli, "_load_speaker_recognition_module", lambda: fake_speaker_module)
+
+    with pytest.raises(SystemExit):
+        cli._cmd_speakers_test_backend(SimpleNamespace())

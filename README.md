@@ -136,8 +136,8 @@ on-the-record start
 Build the executable on Windows. PyInstaller does not support cross-compiling a working Windows binary from macOS or Linux.
 
 ```bash
-# Install the optional build dependency group
-uv sync --group build
+# Install build dependencies plus the speaker-recognition stack bundled into the exe
+uv sync --extra speaker --group build
 
 # Produce dist/on-the-record.exe
 uv run python scripts/build_windows_exe.py
@@ -145,7 +145,7 @@ uv run python scripts/build_windows_exe.py
 
 The generated executable is a console app at `dist/on-the-record.exe` and uses the same `OPENAI_API_KEY` environment variable as the Python version.
 
-The default executable does not bundle the optional SpeechBrain/Torch speaker-recognition stack. Use the Python/uv workflow with `uv sync --extra speaker` for `--recognize-speakers` and `--enroll-speakers`.
+The executable bundles the SpeechBrain/Torch speaker-recognition stack and the ECAPA speaker model, so `--recognize-speakers` and `--enroll-speakers` work from the exe without a separate Python environment.
 
 ## Configuration
 
@@ -241,6 +241,7 @@ Manage saved profiles with:
 uv run on-the-record speakers list
 uv run on-the-record speakers rename <profile-id-or-name> "New Name"
 uv run on-the-record speakers remove <profile-id-or-name>
+uv run on-the-record speakers test-backend
 ```
 
 Profiles are stored in a platform data directory by default, such as `%APPDATA%\on-the-record\speakers` on Windows. You can override the location with `--speaker-profiles PATH` on both `start` and `speakers` commands.

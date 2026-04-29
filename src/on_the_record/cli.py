@@ -566,6 +566,21 @@ def _cmd_speakers_remove(args: argparse.Namespace) -> None:
     print(f"Removed speaker profile {profile.display_name}.")
 
 
+def _cmd_speakers_test_backend(args: argparse.Namespace) -> None:
+    """Load the speaker embedding backend and verify it can compute an embedding."""
+    import numpy as np
+
+    speaker_recognition = _load_speaker_recognition_module()
+    try:
+        backend = speaker_recognition.create_speaker_backend()
+    except speaker_recognition.SpeakerRecognitionUnavailable as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    embedding = backend.embed(np.zeros(DEFAULT_SAMPLE_RATE, dtype=np.float32), DEFAULT_SAMPLE_RATE)
+    print(f"Speaker backend OK: embedding dimensions={len(embedding)}")
+
+
 # ---------------------------------------------------------------------------
 # Argument parser
 # ---------------------------------------------------------------------------
@@ -752,6 +767,12 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     speakers_remove.add_argument("profile", help="Speaker profile id or display name.")
     speakers_remove.set_defaults(func=_cmd_speakers_remove)
+
+    speakers_test_backend = speakers_sub.add_parser(
+        "test-backend",
+        help="Load speaker recognition and compute a test embedding.",
+    )
+    speakers_test_backend.set_defaults(func=_cmd_speakers_test_backend)
 
     return parser
 
