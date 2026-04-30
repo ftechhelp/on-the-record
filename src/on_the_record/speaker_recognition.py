@@ -318,6 +318,7 @@ class SpeakerRecognitionSession:
         self.save_samples = save_samples
         self.sample_directory = Path(sample_directory) if sample_directory else store.directory / "samples"
         self.clusters: list[UnknownSpeakerCluster] = []
+        self._clusters_by_label: dict[str, UnknownSpeakerCluster] = {}
         self._cluster_embeddings: dict[str, list[list[float]]] = {}
 
     def resolve_segment(
@@ -329,7 +330,7 @@ class SpeakerRecognitionSession:
         audio: np.ndarray,
         sample_rate: int,
     ) -> str:
-        """Return the resolved speaker name or a temporary cluster label."""
+        """Return a known speaker name, or preserve the diarized speaker label."""
         if audio.size < int(self.min_segment_seconds * sample_rate):
             return speaker_label
 
@@ -338,13 +339,13 @@ class SpeakerRecognitionSession:
         if match is not None:
             return match.profile.display_name
 
-        cluster = self._find_or_create_cluster(embedding)
+        cluster = self._find_or_create_cluster(speaker_label, embedding)
         cluster.segment_indices.append(segment_index)
         if text.strip() and len(cluster.snippets) < 3:
             cluster.snippets.append(text.strip())
         if self.save_samples and not cluster.sample_paths:
             cluster.sample_paths.append(str(self._save_cluster_sample(cluster, audio, sample_rate)))
-        return cluster.temporary_name
+        return speaker_label
 
     def prompt_for_unknowns(
         self,
@@ -367,9 +368,12 @@ class SpeakerRecognitionSession:
                 for snippet in cluster.snippets:
                     print(f"  {snippet[:120]}", file=stream)
 
-            display_name = input_func(
-                f"Name for {cluster.temporary_name} (blank to keep label): "
-            ).strip()
+            try:
+                display_name = input_func(
+                    f"Name for {cluster.temporary_name} (blank to keep label): "
+                ).strip()
+            except EOFError:
+                break
             if not display_name:
                 continue
 
@@ -379,28 +383,22 @@ class SpeakerRecognitionSession:
 
         return mapping
 
-    def _find_or_create_cluster(self, embedding: list[float]) -> UnknownSpeakerCluster:
-        best_cluster: UnknownSpeakerCluster | None = None
-        best_score = 0.0
-        for cluster in self.clusters:
-            score = cosine_similarity(embedding, cluster.embedding)
-            if score > best_score:
-                best_cluster = cluster
-                best_score = score
-
-        if best_cluster is not None and best_score >= self.cluster_threshold:
-            embeddings = self._cluster_embeddings[best_cluster.id]
+    def _find_or_create_cluster(self, speaker_label: str, embedding: list[float]) -> UnknownSpeakerCluster:
+        label = speaker_label.strip() or "Unknown"
+        existing = self._clusters_by_label.get(label)
+        if existing is not None:
+            embeddings = self._cluster_embeddings[existing.id]
             embeddings.append(embedding)
-            best_cluster.embedding = average_embeddings(embeddings)
-            return best_cluster
+            existing.embedding = average_embeddings(embeddings)
+            return existing
 
-        cluster_number = len(self.clusters) + 1
         cluster = UnknownSpeakerCluster(
             id=str(uuid.uuid4()),
-            temporary_name=f"Unknown Speaker {cluster_number}",
+            temporary_name=label,
             embedding=embedding,
         )
         self.clusters.append(cluster)
+        self._clusters_by_label[label] = cluster
         self._cluster_embeddings[cluster.id] = [embedding]
         return cluster
 

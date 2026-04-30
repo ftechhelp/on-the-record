@@ -77,23 +77,78 @@ def test_session_recognizes_known_speaker(tmp_path: Path):
     assert speaker == "Alice"
 
 
-def test_session_clusters_unknown_and_prompts_for_name(tmp_path: Path):
+def test_session_preserves_unknown_label_and_prompts_for_name(tmp_path: Path):
     store = SpeakerProfileStore(tmp_path)
     store.load()
     session = SpeakerRecognitionSession(store, FakeBackend(), threshold=0.99)
 
     speaker = session.resolve_segment(
         segment_index=0,
-        speaker_label="Speaker 1",
+        speaker_label="A",
         text="please remember me",
         audio=np.ones(16_000, dtype=np.float32),
         sample_rate=16_000,
     )
     mapping = session.prompt_for_unknowns(input_func=lambda prompt: "Bob")
 
-    assert speaker == "Unknown Speaker 1"
-    assert mapping == {"Unknown Speaker 1": "Bob"}
+    assert speaker == "A"
+    assert mapping == {"A": "Bob"}
     assert store.find_by_name("Bob") is not None
+
+
+def test_session_prompts_once_per_unknown_label(tmp_path: Path):
+    store = SpeakerProfileStore(tmp_path)
+    store.load()
+    session = SpeakerRecognitionSession(store, FakeBackend(), threshold=0.99)
+    prompts = []
+
+    for index, text in enumerate(["first", "second"]):
+        speaker = session.resolve_segment(
+            segment_index=index,
+            speaker_label="A",
+            text=text,
+            audio=np.ones(16_000, dtype=np.float32),
+            sample_rate=16_000,
+        )
+        assert speaker == "A"
+
+    mapping = session.prompt_for_unknowns(input_func=lambda prompt: prompts.append(prompt) or "Bob")
+
+    assert prompts == ["Name for A (blank to keep label): "]
+    assert mapping == {"A": "Bob"}
+    assert store.find_by_name("Bob").sample_count == 2
+
+
+def test_session_prompt_handles_eof_after_partial_mapping(tmp_path: Path):
+    store = SpeakerProfileStore(tmp_path)
+    store.load()
+    session = SpeakerRecognitionSession(store, FakeBackend(), threshold=0.99)
+    responses = iter(["Alice"])
+
+    session.resolve_segment(
+        segment_index=0,
+        speaker_label="A",
+        text="first",
+        audio=np.ones(16_000, dtype=np.float32),
+        sample_rate=16_000,
+    )
+    session.resolve_segment(
+        segment_index=1,
+        speaker_label="B",
+        text="second",
+        audio=np.zeros(16_000, dtype=np.float32),
+        sample_rate=16_000,
+    )
+
+    def input_func(prompt: str) -> str:
+        try:
+            return next(responses)
+        except StopIteration as exc:
+            raise EOFError from exc
+
+    mapping = session.prompt_for_unknowns(input_func=input_func)
+
+    assert mapping == {"A": "Alice"}
 
 
 def test_session_saves_samples_only_when_enabled(tmp_path: Path):

@@ -590,11 +590,11 @@ def test_start_enrolls_unknown_speakers_and_rewrites_before_study(monkeypatch):
 
     class FakeSpeakerSession:
         def resolve_segment(self, **kwargs):
-            return "Unknown Speaker 1"
+            return "Speaker 1"
 
         def prompt_for_unknowns(self, *, output=None):
             order.append("prompt")
-            return {"Unknown Speaker 1": "Bob"}
+            return {"Speaker 1": "Bob"}
 
     def fake_transcribe(wav_bytes, *, api_key, model, chunk_offset):
         return [
@@ -633,7 +633,7 @@ def test_start_enrolls_unknown_speakers_and_rewrites_before_study(monkeypatch):
 
     cli._cmd_start(args)
 
-    assert writer.speakers == [["Unknown Speaker 1"]]
+    assert writer.speakers == [["Speaker 1"]]
     assert order == ["prompt", "rewrite", "study"]
 
 

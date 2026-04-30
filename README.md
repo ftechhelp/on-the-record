@@ -236,7 +236,7 @@ Then start a recording as usual:
 uv run on-the-record start --diarize --output ./meeting.json --format json
 ```
 
-When the speaker extra is installed, the tool automatically uses saved profiles to recognize known speakers. When recording stops, it asks you to name unknown speaker clusters. It stores local voice embeddings and rewrites the transcript with the names you entered. By default, raw audio samples are not retained. To also save one WAV sample for each newly enrolled speaker cluster, pass `--speaker-save-samples`.
+When the speaker extra is installed, the tool automatically uses saved profiles to recognize known speakers. Unmatched speakers keep the diarization labels returned by the transcription model, such as `A`, `B`, or `C`. When recording stops, it asks you to name each unmatched label once. It stores local voice embeddings and rewrites the transcript with the names you entered. By default, raw audio samples are not retained. To also save one WAV sample for each newly enrolled speaker label, pass `--speaker-save-samples`.
 
 You can opt out for a run:
 
@@ -322,7 +322,7 @@ Options:
   --no-enroll-speakers    Disable post-recording speaker enrollment prompts
   --speaker-threshold N   Similarity threshold for saved profile matching (default: 0.78)
   --speaker-profiles PATH Speaker profile directory (default: platform data directory)
-  --speaker-save-samples  Save one local WAV sample for each newly enrolled speaker cluster
+  --speaker-save-samples  Save one local WAV sample for each newly enrolled speaker label
   --version               Show version
 ```
 
