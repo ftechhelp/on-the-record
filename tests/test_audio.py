@@ -234,6 +234,10 @@ class _FakeDevice:
 
 
 class TestAudioRecorderMicrophoneMix:
+    def test_requires_at_least_one_audio_source(self):
+        with pytest.raises(ValueError, match="At least one audio source"):
+            AudioRecorder(include_system_audio=False, include_microphone=False)
+
     def test_soundcard_recording_mixes_loopback_and_microphone(self, monkeypatch):
         loopback = _FakeDevice(
             "Speakers Loopback",
@@ -266,6 +270,75 @@ class TestAudioRecorderMicrophoneMix:
         assert chunk.chunk_index == 0
         assert chunk.start_time_offset == 0
 
+    def test_soundcard_recording_can_skip_microphone(self, monkeypatch):
+        loopback = _FakeDevice(
+            "Speakers Loopback",
+            np.array([[0.2], [0.3], [0.0], [0.0]], dtype=np.float32),
+        )
+
+        monkeypatch.setattr(audio_module, "_get_capture_device", lambda device: loopback)
+
+        def fail_get_microphone_device(exclude_device=None):
+            raise AssertionError("microphone should not be opened")
+
+        monkeypatch.setattr(
+            audio_module,
+            "_get_microphone_device",
+            fail_get_microphone_device,
+        )
+
+        recorder = AudioRecorder(
+            sample_rate=4,
+            chunk_seconds=1,
+            include_microphone=False,
+            silence_threshold=0.0,
+        )
+        chunks = recorder._record_soundcard()
+
+        try:
+            chunk = next(chunks)
+        finally:
+            chunks.close()
+
+        assert np.allclose(
+            chunk.audio,
+            np.array([0.2, 0.3, 0.0, 0.0], dtype=np.float32),
+        )
+
+    def test_soundcard_recording_can_skip_system_audio(self, monkeypatch):
+        microphone = _FakeDevice(
+            "Built-in Microphone",
+            np.array([[0.0], [0.4], [0.5], [0.0]], dtype=np.float32),
+        )
+
+        def fail_get_capture_device(device_name=None):
+            raise AssertionError("system audio should not be opened")
+
+        monkeypatch.setattr(audio_module, "_get_capture_device", fail_get_capture_device)
+        monkeypatch.setattr(
+            audio_module,
+            "_get_microphone_device",
+            lambda exclude_device=None: microphone,
+        )
+
+        recorder = AudioRecorder(
+            sample_rate=4,
+            chunk_seconds=1,
+            include_system_audio=False,
+            silence_threshold=0.0,
+        )
+        chunks = recorder._record_soundcard()
+
+        try:
+            chunk = next(chunks)
+        finally:
+            chunks.close()
+
+        assert np.allclose(
+            chunk.audio,
+            np.array([0.0, 0.4, 0.5, 0.0], dtype=np.float32),
+        )
+
     def test_screencapturekit_recording_mixes_system_and_microphone(self, monkeypatch):
         microphone = _FakeDevice(
             "Built-in Microphone",
@@ -285,7 +358,12 @@ class TestAudioRecorderMicrophoneMix:
             def read_chunk(self, num_samples: int):
                 return self.audio[:num_samples]
 
-        monkeypatch.setattr(audio_module, "SystemAudioRecorder", FakeSystemAudioRecorder, raising=False)
+        monkeypatch.setattr(
+            audio_module,
+            "SystemAudioRecorder",
+            FakeSystemAudioRecorder,
+            raising=False,
+        )
         monkeypatch.setattr(
             audio_module,
             "_get_microphone_device",
@@ -306,3 +384,51 @@ class TestAudioRecorderMicrophoneMix:
         )
         assert chunk.chunk_index == 0
         assert chunk.start_time_offset == 0
+
+    def test_screencapturekit_recording_can_skip_microphone(self, monkeypatch):
+        class FakeSystemAudioRecorder:
+            def __init__(self, *, sample_rate: int, channels: int):
+                self.audio = np.array([0.25, 0.0, 0.35, 0.0], dtype=np.float32)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return None
+
+            def read_chunk(self, num_samples: int):
+                return self.audio[:num_samples]
+
+        monkeypatch.setattr(
+            audio_module,
+            "SystemAudioRecorder",
+            FakeSystemAudioRecorder,
+            raising=False,
+        )
+
+        def fail_get_microphone_device(exclude_device=None):
+            raise AssertionError("microphone should not be opened")
+
+        monkeypatch.setattr(
+            audio_module,
+            "_get_microphone_device",
+            fail_get_microphone_device,
+        )
+
+        recorder = AudioRecorder(
+            sample_rate=4,
+            chunk_seconds=1,
+            include_microphone=False,
+            silence_threshold=0.0,
+        )
+        chunks = recorder._record_screencapturekit()
+
+        try:
+            chunk = next(chunks)
+        finally:
+            chunks.close()
+
+        assert np.allclose(
+            chunk.audio,
+            np.array([0.25, 0.0, 0.35, 0.0], dtype=np.float32),
+        )

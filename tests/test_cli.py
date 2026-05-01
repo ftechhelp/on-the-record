@@ -70,6 +70,8 @@ def _make_args(*, study_doc: bool = False):
         format="txt",
         chunk_size=15,
         device=None,
+        no_microphone=False,
+        microphone_only=False,
         model="gpt-4o-transcribe",
         diarize=False,
         study_doc=study_doc,
@@ -80,6 +82,57 @@ def _make_args(*, study_doc: bool = False):
         obsidian_folder=None,
         obsidian_cli_command=None,
     )
+
+
+def test_start_passes_audio_source_flags(monkeypatch):
+    args = _make_args()
+    args.no_microphone = True
+    captured_kwargs = {}
+    writer = _RecordingWriter()
+
+    class FakeRecorder:
+        def __init__(self, **kwargs):
+            captured_kwargs.update(kwargs)
+
+        def stop(self):
+            return None
+
+        def record(self):
+            return
+            yield
+
+    fake_audio_module = SimpleNamespace(
+        AudioRecorder=FakeRecorder,
+        _IS_MACOS=False,
+        _sck_available=False,
+    )
+
+    monkeypatch.setattr(cli, "load_api_key", lambda: "test-key")
+    monkeypatch.setattr(cli, "_load_audio_module", lambda: fake_audio_module)
+    monkeypatch.setattr(cli, "get_writer", lambda fmt, path: writer)
+    monkeypatch.setattr(cli.signal, "signal", lambda *args, **kwargs: None)
+    monkeypatch.setattr(cli, "load_gemini_api_key", lambda: None)
+
+    cli._cmd_start(args)
+
+    assert captured_kwargs["include_system_audio"] is True
+    assert captured_kwargs["include_microphone"] is False
+
+
+def test_resolve_audio_sources_rejects_no_sources():
+    args = SimpleNamespace(no_microphone=True, microphone_only=True)
+
+    with pytest.raises(SystemExit):
+        cli._resolve_audio_sources(args)
+
+
+def test_resolve_audio_sources_supports_single_source_modes():
+    assert cli._resolve_audio_sources(
+        SimpleNamespace(no_microphone=True, microphone_only=False)
+    ) == (True, False)
+    assert cli._resolve_audio_sources(
+        SimpleNamespace(no_microphone=False, microphone_only=True)
+    ) == (False, True)
 
 
 def test_start_keeps_capturing_while_transcribing(monkeypatch):

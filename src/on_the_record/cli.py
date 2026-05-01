@@ -16,6 +16,7 @@ import signal
 import sys
 import threading
 import time
+from contextlib import ExitStack
 from datetime import datetime
 from pathlib import Path
 
@@ -49,6 +50,35 @@ logger = logging.getLogger("on_the_record")
 
 _CAPTURE_COMPLETE = object()
 _CAPTURE_POLL_INTERVAL = 0.1
+
+
+def _resolve_audio_sources(args: argparse.Namespace) -> tuple[bool, bool]:
+    include_system_audio = not getattr(args, "microphone_only", False)
+    include_microphone = not getattr(args, "no_microphone", False)
+
+    if not include_system_audio and not include_microphone:
+        print(
+            "Error: --microphone-only and --no-microphone cannot be used together.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    return include_system_audio, include_microphone
+
+
+def _format_audio_sources(
+    *,
+    include_system_audio: bool,
+    include_microphone: bool,
+    system_name: str | None = None,
+    microphone_name: str | None = None,
+) -> str:
+    sources = []
+    if include_system_audio:
+        sources.append(system_name or "system audio")
+    if include_microphone:
+        sources.append(microphone_name or "microphone")
+    return " + ".join(sources)
 
 
 def _maybe_generate_study_document(
@@ -247,6 +277,7 @@ def _setup_logging() -> None:
 
 def _cmd_start(args: argparse.Namespace) -> None:
     """Main recording + transcription loop."""
+    include_system_audio, include_microphone = _resolve_audio_sources(args)
     api_key = load_api_key()
     audio_module = _load_audio_module()
 
@@ -272,6 +303,8 @@ def _cmd_start(args: argparse.Namespace) -> None:
         channels=1,
         chunk_seconds=args.chunk_size,
         device_name=args.device,
+        include_system_audio=include_system_audio,
+        include_microphone=include_microphone,
         silence_threshold=DEFAULT_SILENCE_THRESHOLD,
         output_path=str(path),
         output_format=args.format,
@@ -283,9 +316,16 @@ def _cmd_start(args: argparse.Namespace) -> None:
     logger.info("Output:      %s", config.output_path)
     logger.info("Format:      %s", config.output_format)
     logger.info("Chunk size:  %d s", config.chunk_seconds)
+    logger.info(
+        "Sources:     %s",
+        _format_audio_sources(
+            include_system_audio=config.include_system_audio,
+            include_microphone=config.include_microphone,
+        ),
+    )
     if config.device_name:
         logger.info("Device:      %s", config.device_name)
-    if audio_module._IS_MACOS:
+    if audio_module._IS_MACOS and config.include_system_audio:
         if audio_module._sck_available:
             logger.info(
                 "Using ScreenCaptureKit for native system audio capture.\n"
@@ -304,6 +344,8 @@ def _cmd_start(args: argparse.Namespace) -> None:
         channels=config.channels,
         chunk_seconds=config.chunk_seconds,
         device_name=config.device_name,
+        include_system_audio=config.include_system_audio,
+        include_microphone=config.include_microphone,
         silence_threshold=config.silence_threshold,
     )
 
@@ -486,62 +528,84 @@ def _cmd_test_audio(args: argparse.Namespace) -> None:
     device_name = args.device
     duration = args.seconds
     sample_rate = DEFAULT_SAMPLE_RATE
+    include_system_audio, include_microphone = _resolve_audio_sources(args)
 
     # Use ScreenCaptureKit if available and no explicit non-SCK device chosen.
-    use_sck = audio_module._sck_available and (
+    use_sck = include_system_audio and audio_module._sck_available and (
         device_name is None or device_name == "screencapturekit"
     )
 
     if use_sck:
         from on_the_record.macos_audio import SystemAudioRecorder
 
-        microphone = audio_module._get_microphone_device()
-        print(
-            f"Recording {duration}s via ScreenCaptureKit plus microphone '{microphone.name}' …\n"
+        microphone = (
+            audio_module._get_microphone_device()
+            if include_microphone
+            else None
         )
+        source_description = _format_audio_sources(
+            include_system_audio=True,
+            include_microphone=include_microphone,
+            microphone_name=microphone.name if microphone is not None else None,
+        )
+        print(f"Recording {duration}s from {source_description} …\n")
         sck = SystemAudioRecorder(sample_rate=sample_rate, channels=1)
-        with sck, microphone.recorder(
-            samplerate=sample_rate, channels=1
-        ) as microphone_recorder:
-            recordings = audio_module._record_sources_concurrently(
-                {
-                    "system": lambda: sck.read_chunk(sample_rate * duration),
-                    "microphone": lambda: microphone_recorder.record(
-                        numframes=sample_rate * duration
-                    ),
-                }
-            )
-        audio = audio_module._mix_audio_sources(
-            recordings["system"],
-            recordings["microphone"],
-        )
+        with ExitStack() as stack:
+            sck = stack.enter_context(sck)
+            microphone_recorder = None
+            if microphone is not None:
+                microphone_recorder = stack.enter_context(
+                    microphone.recorder(samplerate=sample_rate, channels=1)
+                )
+            readers = {"system": lambda: sck.read_chunk(sample_rate * duration)}
+            if microphone_recorder is not None:
+                readers["microphone"] = lambda: microphone_recorder.record(
+                    numframes=sample_rate * duration
+                )
+            recordings = audio_module._record_sources_concurrently(readers)
+        audio = audio_module._mix_audio_sources(*recordings.values())
     else:
-        mic = audio_module._get_capture_device(device_name)
-        microphone = audio_module._get_microphone_device(exclude_device=mic)
-        print(
-            f"Recording {duration}s from '{mic.name}' plus microphone '{microphone.name}' …\n"
+        mic = (
+            audio_module._get_capture_device(device_name)
+            if include_system_audio
+            else None
         )
-
-        with mic.recorder(
-            samplerate=sample_rate, channels=1
-        ) as system_recorder, microphone.recorder(
-            samplerate=sample_rate, channels=1
-        ) as microphone_recorder:
-            recordings = audio_module._record_sources_concurrently(
-                {
-                    "system": lambda: system_recorder.record(
-                        numframes=sample_rate * duration
-                    ),
-                    "microphone": lambda: microphone_recorder.record(
-                        numframes=sample_rate * duration
-                    ),
-                }
-            )
-
-        audio = audio_module._mix_audio_sources(
-            recordings["system"],
-            recordings["microphone"],
+        microphone = (
+            audio_module._get_microphone_device(exclude_device=mic)
+            if include_microphone
+            else None
         )
+        source_description = _format_audio_sources(
+            include_system_audio=include_system_audio,
+            include_microphone=include_microphone,
+            system_name=mic.name if mic is not None else None,
+            microphone_name=microphone.name if microphone is not None else None,
+        )
+        print(f"Recording {duration}s from {source_description} …\n")
+
+        with ExitStack() as stack:
+            system_recorder = None
+            microphone_recorder = None
+            if mic is not None:
+                system_recorder = stack.enter_context(
+                    mic.recorder(samplerate=sample_rate, channels=1)
+                )
+            if microphone is not None:
+                microphone_recorder = stack.enter_context(
+                    microphone.recorder(samplerate=sample_rate, channels=1)
+                )
+            readers = {}
+            if system_recorder is not None:
+                readers["system"] = lambda: system_recorder.record(
+                    numframes=sample_rate * duration
+                )
+            if microphone_recorder is not None:
+                readers["microphone"] = lambda: microphone_recorder.record(
+                    numframes=sample_rate * duration
+                )
+            recordings = audio_module._record_sources_concurrently(readers)
+
+        audio = audio_module._mix_audio_sources(*recordings.values())
 
     rms = float(np.sqrt(np.mean(audio.astype(np.float64) ** 2)))
     peak = float(np.max(np.abs(audio)))
@@ -624,6 +688,17 @@ def _build_parser() -> argparse.ArgumentParser:
         "--device",
         default=None,
         help="Audio device name (substring match). Use 'list-devices' to see options.",
+    )
+    start.add_argument(
+        "--no-microphone",
+        action="store_true",
+        help="Capture system audio only; do not record your microphone.",
+    )
+    start.add_argument(
+        "--microphone-only",
+        "--no-system-audio",
+        action="store_true",
+        help="Capture microphone only; do not record system/output audio.",
     )
     start.add_argument(
         "-m",
@@ -755,6 +830,17 @@ def _build_parser() -> argparse.ArgumentParser:
         type=int,
         default=5,
         help="Seconds to record (default: 5).",
+    )
+    ta.add_argument(
+        "--no-microphone",
+        action="store_true",
+        help="Test system audio only; do not record your microphone.",
+    )
+    ta.add_argument(
+        "--microphone-only",
+        "--no-system-audio",
+        action="store_true",
+        help="Test microphone only; do not record system/output audio.",
     )
     ta.set_defaults(func=_cmd_test_audio)
 

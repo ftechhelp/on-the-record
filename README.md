@@ -1,12 +1,12 @@
 # on-the-record
 
-Record system audio and your microphone, transcribe it with OpenAI, and write a timestamped transcript as `txt`, `md`, or `json`.
+Record system audio, your microphone, or both; transcribe it with OpenAI; and write a timestamped transcript as `txt`, `md`, or `json`.
 
 It is built as a cross-platform CLI for meetings, lectures, calls, videos, and any other audio playing through your computer. After transcription, it can optionally ask Gemini to turn the transcript into a Markdown study document and copy that note into an Obsidian vault.
 
 ## What it does
 
-- Captures system audio plus your microphone.
+- Captures system audio, your microphone, or both.
 - Streams audio in chunks so recording can continue while transcription runs.
 - Uses native ScreenCaptureKit on macOS 13+.
 - Uses WASAPI loopback on Windows and PulseAudio/PipeWire monitor sources on Linux.
@@ -98,6 +98,12 @@ uv run on-the-record start --chunk-size 30
 
 # Use a specific device name or substring
 uv run on-the-record start --device "BlackHole 2ch"
+
+# Record system audio only
+uv run on-the-record start --no-microphone
+
+# Record microphone only
+uv run on-the-record start --microphone-only
 
 # Disable diarization
 uv run on-the-record start --no-diarize
@@ -192,6 +198,9 @@ Options:
   -f, --format {txt,md,json}   Transcript format. Default: txt
   -c, --chunk-size SECONDS     Audio chunk length. Default: 15
   -d, --device NAME            Audio device name substring
+  --no-microphone              Capture system audio only
+  --microphone-only            Capture microphone only
+  --no-system-audio            Alias for --microphone-only
   -m, --model MODEL            OpenAI model. Default: gpt-4o-transcribe
   --diarize                    Enable speaker diarization. Default
   --no-diarize                 Disable speaker diarization
@@ -216,6 +225,9 @@ on-the-record test-audio [OPTIONS]
 Options:
   -d, --device NAME            Audio device name substring
   -s, --seconds SECONDS        Seconds to record. Default: 5
+  --no-microphone              Test system audio only
+  --microphone-only            Test microphone only
+  --no-system-audio            Alias for --microphone-only
 ```
 
 ```text

@@ -20,6 +20,8 @@ class Config:
     channels: int = 1
     chunk_seconds: int = 15
     device_name: str | None = None
+    include_system_audio: bool = True
+    include_microphone: bool = True
 
     # Silence detection — RMS threshold below which a chunk is considered silent.
     # A 16-bit PCM signal has a max amplitude of 32767; 0.003 is well below any
