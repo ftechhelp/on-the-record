@@ -29,11 +29,18 @@ from on_the_record.config import (
     DEFAULT_SILENCE_THRESHOLD,
     load_api_key,
 )
+from on_the_record.obsidian import (
+    ObsidianConfig,
+    clear_obsidian_config,
+    config_file_path,
+    export_study_document_to_obsidian,
+    load_obsidian_config,
+    save_obsidian_config,
+)
 from on_the_record.study import (
     DEFAULT_GEMINI_MODEL,
-    default_study_output_path,
     load_gemini_api_key,
-    write_study_document,
+    write_named_study_document,
 )
 from on_the_record.transcribe import transcribe_chunk
 from on_the_record.writer import SUPPORTED_FORMATS, get_writer
@@ -51,6 +58,10 @@ def _maybe_generate_study_document(
     output_path: str | None,
     model: str,
     total_segments: int,
+    obsidian_enabled: bool | None = None,
+    obsidian_vault: str | None = None,
+    obsidian_folder: str | None = None,
+    obsidian_cli_command: str | None = None,
 ) -> None:
     """Generate a Markdown study document after recording, if configured."""
     if not enabled:
@@ -67,11 +78,14 @@ def _maybe_generate_study_document(
         )
         return
 
-    study_path = Path(output_path) if output_path else default_study_output_path(transcript_path)
-    logger.info("Generating Gemini study document: %s", study_path)
+    study_path = Path(output_path) if output_path else None
+    if study_path:
+        logger.info("Generating Gemini study document: %s", study_path)
+    else:
+        logger.info("Generating Gemini study document with a Gemini title.")
 
     try:
-        written_path = write_study_document(
+        written_path = write_named_study_document(
             transcript_path,
             study_path,
             api_key=gemini_api_key,
@@ -82,6 +96,81 @@ def _maybe_generate_study_document(
         return
 
     logger.info("Study document written to %s", written_path)
+    _maybe_export_study_document_to_obsidian(
+        written_path,
+        enabled=obsidian_enabled,
+        vault_path=obsidian_vault,
+        study_folder=obsidian_folder,
+        cli_command=obsidian_cli_command,
+    )
+
+
+def _maybe_export_study_document_to_obsidian(
+    study_path: str | Path,
+    *,
+    enabled: bool | None,
+    vault_path: str | None,
+    study_folder: str | None,
+    cli_command: str | None,
+) -> None:
+    if enabled is False:
+        logger.info("Obsidian export disabled.")
+        return
+
+    config = _resolve_obsidian_config(
+        vault_path=vault_path,
+        study_folder=study_folder,
+        cli_command=cli_command,
+    )
+
+    if config is None:
+        if enabled is True:
+            logger.warning(
+                "Skipping Obsidian export because no Obsidian vault is configured."
+            )
+        return
+
+    try:
+        exported_path = export_study_document_to_obsidian(study_path, config)
+    except Exception as exc:
+        logger.error("Obsidian export failed: %s", exc)
+        return
+
+    logger.info("Study document exported to Obsidian: %s", exported_path)
+
+
+def _resolve_obsidian_config(
+    *,
+    vault_path: str | None,
+    study_folder: str | None,
+    cli_command: str | None,
+) -> ObsidianConfig | None:
+    saved_config = load_obsidian_config()
+    if vault_path is None and study_folder is None and cli_command is None:
+        return saved_config
+
+    resolved_vault = Path(vault_path).expanduser() if vault_path else None
+    if resolved_vault is None:
+        if saved_config is None:
+            return None
+        resolved_vault = saved_config.vault_path
+
+    return ObsidianConfig(
+        vault_path=resolved_vault,
+        study_folder=(
+            study_folder
+            if study_folder is not None
+            else saved_config.study_folder if saved_config else ""
+        ),
+        cli_command=(
+            cli_command
+            if cli_command is not None
+            else saved_config.cli_command if saved_config else None
+        ),
+        run_cli_after_export=(
+            saved_config.run_cli_after_export if saved_config else True
+        ),
+    )
 
 
 def _queued_chunks(recorder):
@@ -277,7 +366,82 @@ def _cmd_start(args: argparse.Namespace) -> None:
         output_path=getattr(args, "study_output", None),
         model=getattr(args, "gemini_model", DEFAULT_GEMINI_MODEL),
         total_segments=total_segments,
+        obsidian_enabled=getattr(args, "obsidian", None),
+        obsidian_vault=getattr(args, "obsidian_vault", None),
+        obsidian_folder=getattr(args, "obsidian_folder", None),
+        obsidian_cli_command=getattr(args, "obsidian_cli_command", None),
     )
+
+
+# ---------------------------------------------------------------------------
+# ``config obsidian`` command
+# ---------------------------------------------------------------------------
+
+
+def _cmd_config_obsidian(args: argparse.Namespace) -> None:
+    """Show, save, or clear persistent Obsidian export settings."""
+    if args.clear:
+        changed = clear_obsidian_config()
+        if changed:
+            print(f"Cleared Obsidian config from {config_file_path()}")
+        else:
+            print("No Obsidian config was set.")
+        return
+
+    if args.show:
+        _print_obsidian_config(load_obsidian_config())
+        return
+
+    saved_config = load_obsidian_config()
+    has_updates = any(
+        value is not None
+        for value in (args.vault, args.folder, args.cli_command)
+    ) or args.clear_cli_command
+    if not has_updates:
+        _print_obsidian_config(saved_config)
+        return
+
+    vault_path = Path(args.vault).expanduser() if args.vault else None
+    if vault_path is None:
+        if saved_config is None:
+            print("Error: --vault is required for the first Obsidian config.", file=sys.stderr)
+            sys.exit(1)
+        vault_path = saved_config.vault_path
+
+    if args.clear_cli_command:
+        cli_command = None
+    elif args.cli_command is not None:
+        cli_command = args.cli_command.strip() or None
+    elif saved_config is not None:
+        cli_command = saved_config.cli_command
+    else:
+        cli_command = None
+
+    config = ObsidianConfig(
+        vault_path=vault_path,
+        study_folder=(
+            args.folder
+            if args.folder is not None
+            else saved_config.study_folder if saved_config else ""
+        ),
+        cli_command=cli_command,
+        run_cli_after_export=True,
+    )
+    path = save_obsidian_config(config)
+    print(f"Saved Obsidian config to {path}")
+    _print_obsidian_config(config)
+
+
+def _print_obsidian_config(config: ObsidianConfig | None) -> None:
+    if config is None:
+        print(f"No Obsidian config set. Config path: {config_file_path()}")
+        return
+
+    print("Obsidian config:")
+    print(f"  Vault:        {config.vault_path}")
+    print(f"  Study folder: {config.study_folder or '.'}")
+    print(f"  CLI command:  {config.cli_command or '(none)'}")
+    print(f"  Config path:  {config_file_path()}")
 
 
 # ---------------------------------------------------------------------------
@@ -494,14 +658,81 @@ def _build_parser() -> argparse.ArgumentParser:
     start.add_argument(
         "--study-output",
         default=None,
-        help="Study document output path. Defaults to <transcript>_study.md.",
+        help="Study document output path. Defaults to a Gemini-titled Markdown file.",
     )
     start.add_argument(
         "--gemini-model",
         default=DEFAULT_GEMINI_MODEL,
         help=f"Gemini model for study document generation (default: {DEFAULT_GEMINI_MODEL}).",
     )
+    start.add_argument(
+        "--obsidian",
+        action="store_true",
+        default=None,
+        help="Export the Gemini study document to the configured Obsidian vault.",
+    )
+    start.add_argument(
+        "--no-obsidian",
+        action="store_false",
+        dest="obsidian",
+        help="Disable Obsidian export for this run.",
+    )
+    start.add_argument(
+        "--obsidian-vault",
+        default=None,
+        help="Obsidian vault path for this run, overriding saved config.",
+    )
+    start.add_argument(
+        "--obsidian-folder",
+        default=None,
+        help="Vault-relative folder for this run's study document.",
+    )
+    start.add_argument(
+        "--obsidian-cli-command",
+        default=None,
+        help="External command to run after Obsidian export. {file} and {vault} are supported.",
+    )
     start.set_defaults(func=_cmd_start)
+
+    # -- config --------------------------------------------------------------
+    config_parser = sub.add_parser("config", help="Manage persistent settings.")
+    config_sub = config_parser.add_subparsers(dest="config_command")
+
+    obsidian = config_sub.add_parser(
+        "obsidian",
+        help="Configure Obsidian study-document export.",
+    )
+    obsidian.add_argument(
+        "--vault",
+        default=None,
+        help="Path to your Obsidian vault.",
+    )
+    obsidian.add_argument(
+        "--folder",
+        default=None,
+        help="Vault-relative folder for OTR study documents.",
+    )
+    obsidian.add_argument(
+        "--cli-command",
+        default=None,
+        help="Optional command to run after export. {file} and {vault} are supported.",
+    )
+    obsidian.add_argument(
+        "--clear-cli-command",
+        action="store_true",
+        help="Remove the configured Obsidian CLI hook.",
+    )
+    obsidian.add_argument(
+        "--show",
+        action="store_true",
+        help="Show the current Obsidian config.",
+    )
+    obsidian.add_argument(
+        "--clear",
+        action="store_true",
+        help="Clear the Obsidian config.",
+    )
+    obsidian.set_defaults(func=_cmd_config_obsidian)
 
     # -- list-devices --------------------------------------------------------
     ld = sub.add_parser("list-devices", help="List available audio devices.")
@@ -540,7 +771,7 @@ def main(argv: list[str] | None = None) -> None:
     parser = _build_parser()
     args = parser.parse_args(argv)
 
-    if not args.command:
+    if not args.command or not hasattr(args, "func"):
         parser.print_help()
         sys.exit(0)
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import json
 import urllib.error
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -30,6 +31,24 @@ def test_default_study_output_path_uses_markdown_suffix():
     assert study.default_study_output_path(Path("notes") / "transcript.txt") == Path(
         "notes"
     ) / "transcript_study.md"
+
+
+def test_slugify_study_title_returns_file_safe_slug():
+    assert study.slugify_study_title("  Neural Networks: Basics!  ") == "neural-networks-basics"
+    assert study.slugify_study_title("---") == "study-notes"
+
+
+def test_default_named_study_output_path_uses_date_and_unique_suffix(tmp_path):
+    transcript = tmp_path / "transcript.txt"
+    transcript.write_text("transcript", encoding="utf-8")
+    existing = tmp_path / "2026-05-01-neural-networks.md"
+    existing.write_text("existing", encoding="utf-8")
+
+    assert study.default_named_study_output_path(
+        transcript,
+        "Neural Networks",
+        current_date=date(2026, 5, 1),
+    ) == tmp_path / "2026-05-01-neural-networks-2.md"
 
 
 def test_load_gemini_api_key_returns_none_when_unset(tmp_path, monkeypatch):
@@ -83,6 +102,45 @@ def test_generate_study_document_rejects_empty_transcript():
         study.generate_study_document("   ", api_key="gemini-key")
 
 
+def test_generate_study_title_calls_gemini_and_cleans_title(monkeypatch):
+    captured = {}
+
+    def fake_urlopen(request, timeout):
+        captured["url"] = request.full_url
+        captured["timeout"] = timeout
+        captured["body"] = json.loads(request.data.decode("utf-8"))
+        return _FakeResponse(
+            {
+                "candidates": [
+                    {
+                        "content": {
+                            "parts": [
+                                {"text": "```markdown\n# Neural Network Basics!\n```"}
+                            ]
+                        }
+                    }
+                ]
+            }
+        )
+
+    monkeypatch.setattr(study.urllib.request, "urlopen", fake_urlopen)
+
+    title = study.generate_study_title(
+        "[00:00:00] Speaker: Learn backpropagation.",
+        api_key="gemini-key",
+        model="gemini-test",
+        timeout=4,
+    )
+
+    assert title == "Neural Network Basics!"
+    assert "gemini-test:generateContent" in captured["url"]
+    assert "key=gemini-key" in captured["url"]
+    assert captured["timeout"] == 4
+    prompt = captured["body"]["contents"][0]["parts"][0]["text"]
+    assert "Create a short, descriptive title" in prompt
+    assert "backpropagation" in prompt
+
+
 def test_generate_study_document_wraps_http_error(monkeypatch):
     def fake_urlopen(request, timeout):
         raise urllib.error.HTTPError(
@@ -119,4 +177,38 @@ def test_write_study_document_reads_transcript_and_writes_markdown(tmp_path, mon
 
     assert written == output
     assert output.read_text(encoding="utf-8") == "# Notes\n\nraw transcript\n"
+
+
+def test_write_named_study_document_uses_gemini_title_when_output_missing(
+    tmp_path,
+    monkeypatch,
+):
+    transcript = tmp_path / "transcript.txt"
+    transcript.write_text("raw transcript", encoding="utf-8")
+
+    monkeypatch.setattr(
+        study,
+        "generate_study_document",
+        lambda transcript_text, *, api_key, model: "# Notes",
+    )
+    monkeypatch.setattr(
+        study,
+        "generate_study_title",
+        lambda transcript_text, *, api_key, model: "Useful Topic",
+    )
+    monkeypatch.setattr(
+        study,
+        "default_named_study_output_path",
+        lambda transcript_path, title: tmp_path / "2026-05-01-useful-topic.md",
+    )
+
+    written = study.write_named_study_document(
+        transcript,
+        None,
+        api_key="gemini-key",
+        model="gemini-test",
+    )
+
+    assert written == tmp_path / "2026-05-01-useful-topic.md"
+    assert written.read_text(encoding="utf-8") == "# Notes\n"
 

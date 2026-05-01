@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from on_the_record import cli
+from on_the_record.obsidian import ObsidianConfig
 from on_the_record.transcribe import TranscriptSegment
 
 
@@ -63,7 +64,7 @@ class _RecordingWriter:
         self.written.append([segment.text for segment in segments])
 
 
-def _make_args():
+def _make_args(*, study_doc: bool = False):
     return SimpleNamespace(
         output="transcript.txt",
         format="txt",
@@ -71,9 +72,13 @@ def _make_args():
         device=None,
         model="gpt-4o-transcribe",
         diarize=False,
-        study_doc=True,
+        study_doc=study_doc,
         study_output=None,
         gemini_model="gemini-2.5-flash",
+        obsidian=None,
+        obsidian_vault=None,
+        obsidian_folder=None,
+        obsidian_cli_command=None,
     )
 
 
@@ -287,7 +292,7 @@ def test_start_polls_while_waiting_for_first_chunk(monkeypatch):
 
 
 def test_start_generates_study_document_after_recording(monkeypatch):
-    args = _make_args()
+    args = _make_args(study_doc=True)
     writer = _RecordingWriter()
     generated = {}
 
@@ -326,25 +331,26 @@ def test_start_generates_study_document_after_recording(monkeypatch):
 
     def fake_write_study_document(transcript_path, output_path, *, api_key, model):
         generated["transcript_path"] = transcript_path
-        generated["output_path"] = str(output_path)
+        generated["output_path"] = output_path
         generated["api_key"] = api_key
         generated["model"] = model
-        return output_path
+        return "2026-05-01-chunk-0.md"
 
-    monkeypatch.setattr(cli, "write_study_document", fake_write_study_document)
+    monkeypatch.setattr(cli, "write_named_study_document", fake_write_study_document)
+    monkeypatch.setattr(cli, "load_obsidian_config", lambda: None)
 
     cli._cmd_start(args)
 
     assert generated == {
         "transcript_path": "transcript.txt",
-        "output_path": "transcript_study.md",
+        "output_path": None,
         "api_key": "gemini-key",
         "model": "gemini-2.5-flash",
     }
 
 
 def test_start_skips_study_document_without_gemini_key(monkeypatch):
-    args = _make_args()
+    args = _make_args(study_doc=True)
     writer = _RecordingWriter()
 
     class FakeRecorder:
@@ -383,7 +389,7 @@ def test_start_skips_study_document_without_gemini_key(monkeypatch):
     def fail_write_study_document(*args, **kwargs):
         raise AssertionError("study document should be skipped without Gemini key")
 
-    monkeypatch.setattr(cli, "write_study_document", fail_write_study_document)
+    monkeypatch.setattr(cli, "write_named_study_document", fail_write_study_document)
 
     cli._cmd_start(args)
 
@@ -431,10 +437,138 @@ def test_start_honors_no_study_doc(monkeypatch):
     def fail_write_study_document(*args, **kwargs):
         raise AssertionError("study document should be disabled")
 
-    monkeypatch.setattr(cli, "write_study_document", fail_write_study_document)
+    monkeypatch.setattr(cli, "write_named_study_document", fail_write_study_document)
 
     cli._cmd_start(args)
 
     assert writer.written == [["chunk-0"]]
+
+
+def test_start_exports_study_document_to_obsidian(monkeypatch, tmp_path):
+    args = _make_args(study_doc=True)
+    writer = _RecordingWriter()
+    written_study = tmp_path / "2026-05-01-topic.md"
+    exported = {}
+
+    class FakeRecorder:
+        def __init__(self, **kwargs):
+            return None
+
+        def stop(self):
+            return None
+
+        def record(self):
+            yield _FakeChunk(0)
+
+    def fake_transcribe(wav_bytes, *, api_key, model, chunk_offset):
+        return [
+            TranscriptSegment(
+                speaker="Speaker",
+                text=wav_bytes.decode("ascii"),
+                start=chunk_offset,
+                end=chunk_offset + 1,
+            )
+        ]
+
+    fake_audio_module = SimpleNamespace(
+        AudioRecorder=FakeRecorder,
+        _IS_MACOS=False,
+        _sck_available=False,
+    )
+
+    monkeypatch.setattr(cli, "load_api_key", lambda: "test-key")
+    monkeypatch.setattr(cli, "_load_audio_module", lambda: fake_audio_module)
+    monkeypatch.setattr(cli, "get_writer", lambda fmt, path: writer)
+    monkeypatch.setattr(cli, "transcribe_chunk", fake_transcribe)
+    monkeypatch.setattr(cli, "load_gemini_api_key", lambda: "gemini-key")
+    monkeypatch.setattr(cli.signal, "signal", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        cli,
+        "write_named_study_document",
+        lambda transcript_path, output_path, *, api_key, model: written_study,
+    )
+    monkeypatch.setattr(
+        cli,
+        "load_obsidian_config",
+        lambda: ObsidianConfig(vault_path=tmp_path / "Vault", study_folder="OTR"),
+    )
+
+    def fake_export(study_path, config):
+        exported["study_path"] = study_path
+        exported["config"] = config
+        return tmp_path / "Vault" / "OTR" / "2026-05-01-topic.md"
+
+    monkeypatch.setattr(cli, "export_study_document_to_obsidian", fake_export)
+
+    cli._cmd_start(args)
+
+    assert exported["study_path"] == written_study
+    assert exported["config"].study_folder == "OTR"
+
+
+def test_config_obsidian_show_without_config(monkeypatch, capsys, tmp_path):
+    monkeypatch.setattr(cli, "load_obsidian_config", lambda: None)
+    monkeypatch.setattr(cli, "config_file_path", lambda: tmp_path / "config.json")
+
+    cli._cmd_config_obsidian(
+        SimpleNamespace(
+            clear=False,
+            show=True,
+            vault=None,
+            folder=None,
+            cli_command=None,
+            clear_cli_command=False,
+        )
+    )
+
+    assert "No Obsidian config set" in capsys.readouterr().out
+
+
+def test_config_obsidian_saves_config(monkeypatch, capsys, tmp_path):
+    saved = {}
+    monkeypatch.setattr(cli, "load_obsidian_config", lambda: None)
+    monkeypatch.setattr(cli, "config_file_path", lambda: tmp_path / "config.json")
+
+    def fake_save(config):
+        saved["config"] = config
+        return tmp_path / "config.json"
+
+    monkeypatch.setattr(cli, "save_obsidian_config", fake_save)
+
+    cli._cmd_config_obsidian(
+        SimpleNamespace(
+            clear=False,
+            show=False,
+            vault=str(tmp_path / "Vault"),
+            folder="OTR",
+            cli_command="obsidian open {file}",
+            clear_cli_command=False,
+        )
+    )
+
+    assert saved["config"] == ObsidianConfig(
+        vault_path=tmp_path / "Vault",
+        study_folder="OTR",
+        cli_command="obsidian open {file}",
+    )
+    assert "Saved Obsidian config" in capsys.readouterr().out
+
+
+def test_config_obsidian_clear(monkeypatch, capsys):
+    monkeypatch.setattr(cli, "clear_obsidian_config", lambda: True)
+    monkeypatch.setattr(cli, "config_file_path", lambda: "config.json")
+
+    cli._cmd_config_obsidian(
+        SimpleNamespace(
+            clear=True,
+            show=False,
+            vault=None,
+            folder=None,
+            cli_command=None,
+            clear_cli_command=False,
+        )
+    )
+
+    assert "Cleared Obsidian config" in capsys.readouterr().out
 
 

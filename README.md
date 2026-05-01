@@ -10,6 +10,7 @@ A cross-platform CLI tool that captures all audio playing through your system's 
 - Speaker diarization — identifies who is speaking
 - Multiple output formats: plain text, Markdown, JSON
 - Optional Gemini-generated Markdown study documents after recording stops
+- Optional Obsidian export for Gemini study documents into a configured vault folder
 - Configurable chunk size for real-time transcription
 - Silence detection to skip quiet periods and save API costs
 - Graceful start/stop via Ctrl+C
@@ -176,6 +177,32 @@ export GEMINI_API_KEY='...'
 
 If `GEMINI_API_KEY` is not set, recording and transcription still work; the study document step is skipped.
 
+### Obsidian study-note export
+
+on-the-record can copy each Gemini-generated study document into a configured Obsidian vault. The primary integration is a normal filesystem write into your vault folder, so Obsidian sync plugins and Obsidian itself can pick up the note naturally.
+
+Configure your vault once:
+
+```bash
+uv run on-the-record config obsidian --vault ~/Documents/ObsidianVault --folder "OTR Study Notes"
+```
+
+Show or clear the saved Obsidian settings:
+
+```bash
+uv run on-the-record config obsidian --show
+uv run on-the-record config obsidian --clear
+```
+
+You can also configure an optional external CLI hook that runs after export. Use `{file}` for the exported Markdown path and `{vault}` for the vault path. If no placeholder is used, the exported file path is appended to the command.
+
+```bash
+uv run on-the-record config obsidian --cli-command "obsidian open {file}"
+uv run on-the-record config obsidian --clear-cli-command
+```
+
+When Obsidian is configured, study documents are exported after they are generated. Use `--no-obsidian` to skip export for one run, or use `--obsidian-vault` / `--obsidian-folder` to override the saved destination for one run.
+
 ## Usage
 
 ### Start transcribing
@@ -206,7 +233,7 @@ uv run on-the-record start -o ./meeting.md -f md -c 20 -d "BlackHole"
 > If you activated the venv or installed globally, you can drop the `uv run` prefix.
 
 Press **Ctrl+C** to stop recording. The final chunk will be transcribed before exit.
-If `GEMINI_API_KEY` is set, on-the-record then asks Gemini to turn the transcript into a Markdown study document. The default path is `<transcript>_study.md`, for example `transcript_20260428_153834_study.md`.
+If `GEMINI_API_KEY` is set, on-the-record then asks Gemini to turn the transcript into a Markdown study document. When you do not pass `--study-output`, Gemini also chooses a short searchable title for the filename. The default path is date-prefixed, for example `2026-05-01-neural-network-basics.md`.
 
 ```bash
 # Write the Gemini study document to a custom path
@@ -217,7 +244,18 @@ uv run on-the-record start --no-study-doc
 
 # Use a different Gemini model
 uv run on-the-record start --gemini-model gemini-2.5-pro
+
+# Export the generated study document to your configured Obsidian vault
+uv run on-the-record start --obsidian
+
+# Skip Obsidian export for one run
+uv run on-the-record start --no-obsidian
+
+# Override the Obsidian destination for one run
+uv run on-the-record start --obsidian-vault ~/Documents/ObsidianVault --obsidian-folder "Classes/OTR"
 ```
+
+If `--study-output` is provided, on-the-record writes that exact local study-document path. If Obsidian export is enabled, that file is copied into the configured vault folder using the same basename.
 
 ### List audio devices
 
@@ -261,9 +299,27 @@ Options:
   --no-diarize            Disable speaker diarization
   --study-doc             Generate a Gemini Markdown study document after recording (default when GEMINI_API_KEY is set)
   --no-study-doc          Disable Gemini study document generation
-  --study-output PATH     Study document output path (default: <transcript>_study.md)
+  --study-output PATH     Study document output path (default: Gemini-titled YYYY-MM-DD-<title>.md)
   --gemini-model MODEL    Gemini model for study document generation (default: gemini-2.5-flash)
+  --obsidian              Export the Gemini study document to the configured Obsidian vault
+  --no-obsidian           Disable Obsidian export for one run
+  --obsidian-vault PATH   Override the saved Obsidian vault path for one run
+  --obsidian-folder PATH  Override the saved vault-relative study folder for one run
+  --obsidian-cli-command CMD
+                          Override the optional post-export CLI hook for one run
   --version               Show version
+```
+
+```
+on-the-record config obsidian [OPTIONS]
+
+Options:
+  --vault PATH            Path to your Obsidian vault
+  --folder PATH           Vault-relative folder for OTR study documents
+  --cli-command CMD       Optional post-export command. Supports {file} and {vault}
+  --clear-cli-command     Remove the configured CLI hook
+  --show                  Show the current Obsidian config
+  --clear                 Clear the Obsidian config
 ```
 
 ```
