@@ -95,6 +95,18 @@ def import_error() -> str | None:
     return _IMPORT_ERROR
 
 
+def _make_cm_time(value: int, timescale: int):
+    """Create a Core Media ``CMTime`` value for ScreenCaptureKit settings."""
+    import CoreMedia
+
+    try:
+        return CoreMedia.CMTimeMake(value, timescale)
+    except AttributeError as exc:
+        raise RuntimeError(
+            "CoreMedia.CMTimeMake is unavailable; update pyobjc-framework-CoreMedia."
+        ) from exc
+
+
 # ---------------------------------------------------------------------------
 # Audio sample extraction from CMSampleBuffer
 # ---------------------------------------------------------------------------
@@ -208,7 +220,6 @@ if _AVAILABLE:
         def start(self) -> None:
             """Request Screen Recording permission and start the audio stream."""
             import ScreenCaptureKit
-            import Quartz
 
             if self._started:
                 return
@@ -249,9 +260,7 @@ if _AVAILABLE:
                 # macOS 13 — need minimal video stream
                 config.setWidth_(2)
                 config.setHeight_(2)
-                config.setMinimumFrameInterval_(
-                    Quartz.CMTimeMake(1, 1)  # 1 FPS
-                )
+                config.setMinimumFrameInterval_(_make_cm_time(1, 1))  # 1 FPS
                 config.setShowsCursor_(False)
                 logger.info("Using minimal video + audio capture (macOS 13)")
 

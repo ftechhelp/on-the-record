@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import struct
+import sys
 import time
 import types
 import wave
@@ -13,6 +14,7 @@ import numpy as np
 import pytest
 
 import on_the_record.audio as audio_module
+import on_the_record.macos_audio as macos_audio_module
 from on_the_record.audio import AudioRecorder, encode_wav, is_silent
 
 
@@ -156,6 +158,17 @@ class TestSoundcardWindowsCompat:
         assert np.allclose(chunk, np.array([0.25, -0.5], dtype=np.float32))
         assert chunk.base is None
         assert recorder.released == [2]
+
+
+class TestScreenCaptureKitCompat:
+    def test_make_cm_time_uses_coremedia(self, monkeypatch):
+        fake_coremedia = types.SimpleNamespace(
+            CMTimeMake=lambda value, timescale: ("cm-time", value, timescale)
+        )
+
+        monkeypatch.setitem(sys.modules, "CoreMedia", fake_coremedia)
+
+        assert macos_audio_module._make_cm_time(1, 1) == ("cm-time", 1, 1)
 
 
 class TestAudioMixing:
