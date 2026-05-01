@@ -20,8 +20,7 @@ Act as a Python and OS infrastructure audio engineer for this repository. Favor 
 - Use `uv` for dependency management and commands.
 - Install dependencies with `uv sync`; include dev dependencies with `uv sync --group dev`.
 - Run tests with `uv run pytest`, or use a narrower command like `uv run pytest tests/test_audio.py` for focused verification.
-- Build the Windows executable with `uv sync --extra speaker --group build` and `uv run python scripts/build_windows_exe.py`; the output is `dist/on-the-record.exe`.
-- The Windows executable is expected to include the full speaker-recognition stack: SpeechBrain/Torch dependencies plus the bundled ECAPA speaker model. Do not exclude speaker recognition from the default exe unless explicitly asked.
+- Build the Windows executable with `uv sync --group build` and `uv run python scripts/build_windows_exe.py`; the output is `dist/on-the-record.exe`.
 - The app supports `.env` for `OPENAI_API_KEY`, `GEMINI_API_KEY`, and similar runtime values. If a root `.env` exists during Windows exe builds, it is intentionally bundled into the exe; warn that changing embedded values requires rebuilding and that secrets become part of the binary.
 - After making code changes, always rebuild the Windows executable before finishing, and report whether the rebuild succeeded or why it could not be run.
 - No lint or type-check command is configured in `pyproject.toml`.

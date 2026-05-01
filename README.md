@@ -8,7 +8,6 @@ A cross-platform CLI tool that captures all audio playing through your system's 
 - Buffered capture pipeline keeps recording even if transcription falls behind
 - **Native macOS support** — uses ScreenCaptureKit on macOS 13+, no virtual audio device needed
 - Speaker diarization — identifies who is speaking
-- Optional local speaker recognition — remember named speakers across recordings
 - Multiple output formats: plain text, Markdown, JSON
 - Optional Gemini-generated Markdown study documents after recording stops
 - Configurable chunk size for real-time transcription
@@ -101,9 +100,6 @@ cd on-the-record
 
 # Install with uv
 uv sync
-
-# Optional: install local speaker-recognition dependencies
-uv sync --extra speaker
 ```
 
 After `uv sync`, you have three ways to run the tool:
@@ -136,16 +132,14 @@ on-the-record start
 Build the executable on Windows. PyInstaller does not support cross-compiling a working Windows binary from macOS or Linux.
 
 ```bash
-# Install build dependencies plus the speaker-recognition stack bundled into the exe
-uv sync --extra speaker --group build
+# Install build dependencies
+uv sync --group build
 
 # Produce dist/on-the-record.exe
 uv run python scripts/build_windows_exe.py
 ```
 
 The generated executable is a console app at `dist/on-the-record.exe` and uses the same `OPENAI_API_KEY` environment variable as the Python version.
-
-The executable bundles the SpeechBrain/Torch speaker-recognition stack and the ECAPA speaker model, so `--recognize-speakers` and `--enroll-speakers` work from the exe without a separate Python environment.
 
 If a project-root `.env` file exists when you build, it is bundled into `dist/on-the-record.exe`. Rebuild the exe after changing `.env` values that you want embedded.
 
@@ -205,12 +199,6 @@ uv run on-the-record start --device "BlackHole"
 # Disable speaker diarization (faster, cheaper)
 uv run on-the-record start --no-diarize
 
-# Speaker recognition/enrollment runs automatically when the speaker extra is installed
-uv run on-the-record start
-
-# Disable local speaker recognition or post-recording enrollment prompts
-uv run on-the-record start --no-recognize-speakers --no-enroll-speakers
-
 # Combine options
 uv run on-the-record start -o ./meeting.md -f md -c 20 -d "BlackHole"
 ```
@@ -219,47 +207,6 @@ uv run on-the-record start -o ./meeting.md -f md -c 20 -d "BlackHole"
 
 Press **Ctrl+C** to stop recording. The final chunk will be transcribed before exit.
 If `GEMINI_API_KEY` is set, on-the-record then asks Gemini to turn the transcript into a Markdown study document. The default path is `<transcript>_study.md`, for example `transcript_20260428_153834_study.md`.
-
-### Remembering speakers across recordings
-
-Speaker recognition is optional and local. Install the extra dependencies first:
-
-```bash
-uv sync --extra speaker
-```
-
-On Windows, use Python 3.11 or 3.12 for the `speaker` extra. SpeechBrain currently resolves dependencies that do not install cleanly on Python 3.13 without a local compiler toolchain.
-
-Then start a recording as usual:
-
-```bash
-uv run on-the-record start --diarize --output ./meeting.json --format json
-```
-
-When the speaker extra is installed, the tool automatically uses saved profiles to recognize known speakers. Unmatched speakers keep the diarization labels returned by the transcription model, such as `A`, `B`, or `C`. When recording stops, it asks you to name each unmatched label once. It stores local voice embeddings and rewrites the transcript with the names you entered. By default, raw audio samples are not retained. To also save one WAV sample for each newly enrolled speaker label, pass `--speaker-save-samples`.
-
-You can opt out for a run:
-
-```bash
-uv run on-the-record start --no-recognize-speakers --no-enroll-speakers
-```
-
-If the speaker extra is not installed, `start` continues without speaker recognition unless you explicitly pass `--recognize-speakers` or `--enroll-speakers`, in which case it exits with setup guidance.
-
-Manage saved profiles with:
-
-```bash
-uv run on-the-record speakers list
-uv run on-the-record speakers rename <profile-id-or-name> "New Name"
-uv run on-the-record speakers remove <profile-id-or-name>
-uv run on-the-record speakers test-backend
-```
-
-Profiles are stored in a platform data directory by default, such as `%APPDATA%\on-the-record\speakers` on Windows. You can override the location with `--speaker-profiles PATH` on both `start` and `speakers` commands.
-
-Speaker recognition uses local embeddings and conservative matching. It can still be wrong when audio overlaps, a voice is distorted by speakers/headphones, or a person is recorded through a different audio path. Use `--speaker-threshold` to adjust match strictness.
-
-> **Privacy note:** Voice embeddings and optional WAV samples are biometric-adjacent local data. Get consent before enrolling other people, and remove profiles you no longer need with `on-the-record speakers remove`.
 
 ```bash
 # Write the Gemini study document to a custom path
@@ -316,23 +263,7 @@ Options:
   --no-study-doc          Disable Gemini study document generation
   --study-output PATH     Study document output path (default: <transcript>_study.md)
   --gemini-model MODEL    Gemini model for study document generation (default: gemini-2.5-flash)
-  --recognize-speakers    Use local speaker profiles to identify known speakers (default when available)
-  --no-recognize-speakers Disable local speaker profile recognition
-  --enroll-speakers       Prompt for unknown speaker names after recording and save local voice profiles (default when available)
-  --no-enroll-speakers    Disable post-recording speaker enrollment prompts
-  --speaker-threshold N   Similarity threshold for saved profile matching (default: 0.78)
-  --speaker-profiles PATH Speaker profile directory (default: platform data directory)
-  --speaker-save-samples  Save one local WAV sample for each newly enrolled speaker label
   --version               Show version
-```
-
-```
-on-the-record speakers [--speaker-profiles PATH] COMMAND
-
-Commands:
-  list                    List saved speaker profiles
-  rename PROFILE NAME     Rename a saved speaker profile
-  remove PROFILE          Remove a saved speaker profile
 ```
 
 ```

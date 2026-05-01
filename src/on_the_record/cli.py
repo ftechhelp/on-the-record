@@ -35,8 +35,8 @@ from on_the_record.study import (
     load_gemini_api_key,
     write_study_document,
 )
-from on_the_record.transcribe import TranscriptSegment, transcribe_chunk
-from on_the_record.writer import SUPPORTED_FORMATS, get_writer, rewrite_segments
+from on_the_record.transcribe import transcribe_chunk
+from on_the_record.writer import SUPPORTED_FORMATS, get_writer
 
 logger = logging.getLogger("on_the_record")
 
@@ -132,74 +132,6 @@ def _load_audio_module():
     return importlib.import_module("on_the_record.audio")
 
 
-def _load_speaker_recognition_module():
-    """Import speaker recognition only when a command needs it."""
-    return importlib.import_module("on_the_record.speaker_recognition")
-
-
-def _slice_segment_audio(chunk, segment: TranscriptSegment):
-    """Return the audio slice for *segment* inside *chunk*."""
-    local_start = max(0.0, segment.start - chunk.start_time_offset)
-    local_end = max(local_start, segment.end - chunk.start_time_offset)
-    start_sample = int(local_start * chunk.sample_rate)
-    end_sample = int(local_end * chunk.sample_rate)
-    end_sample = min(end_sample, chunk.audio.shape[0])
-    return chunk.audio[start_sample:end_sample]
-
-
-def _replace_speaker(segment: TranscriptSegment, speaker: str) -> TranscriptSegment:
-    """Return *segment* with a different speaker label."""
-    return TranscriptSegment(
-        speaker=speaker,
-        text=segment.text,
-        start=segment.start,
-        end=segment.end,
-    )
-
-
-def _speaker_feature_enabled(value: bool | None) -> bool:
-    """Return whether a speaker feature is enabled by default or flag."""
-    return value is not False
-
-
-def _make_speaker_session(args: argparse.Namespace):
-    """Create the optional speaker-recognition session for ``start``."""
-    recognize_speakers = _speaker_feature_enabled(getattr(args, "recognize_speakers", None))
-    enroll_speakers = _speaker_feature_enabled(getattr(args, "enroll_speakers", None))
-    if not (recognize_speakers or enroll_speakers):
-        return None
-
-    speaker_recognition = _load_speaker_recognition_module()
-    store = speaker_recognition.SpeakerProfileStore(getattr(args, "speaker_profiles", None))
-    store.load()
-
-    try:
-        backend = speaker_recognition.create_speaker_backend()
-    except speaker_recognition.SpeakerRecognitionUnavailable as exc:
-        explicitly_requested = (
-            getattr(args, "recognize_speakers", None) is True
-            or getattr(args, "enroll_speakers", None) is True
-        )
-        if not explicitly_requested:
-            logger.warning("Speaker recognition unavailable; continuing without it. %s", exc)
-            return None
-
-        print(f"Error: {exc}", file=sys.stderr)
-        sys.exit(1)
-
-    return speaker_recognition.SpeakerRecognitionSession(
-        store,
-        backend,
-        threshold=getattr(args, "speaker_threshold", speaker_recognition.DEFAULT_SPEAKER_THRESHOLD),
-        save_samples=getattr(args, "speaker_save_samples", False),
-    )
-
-
-def _find_speaker_profile(store, value: str):
-    """Find a speaker profile by id or display name."""
-    return store.find_by_id(value) or store.find_by_name(value)
-
-
 # ---------------------------------------------------------------------------
 # Logging setup
 # ---------------------------------------------------------------------------
@@ -228,7 +160,6 @@ def _cmd_start(args: argparse.Namespace) -> None:
     """Main recording + transcription loop."""
     api_key = load_api_key()
     audio_module = _load_audio_module()
-    speaker_session = _make_speaker_session(args)
 
     # Resolve output path
     output_path = args.output
@@ -297,7 +228,6 @@ def _cmd_start(args: argparse.Namespace) -> None:
 
     writer = get_writer(config.output_format, config.output_path)
     total_segments = 0
-    all_segments: list[TranscriptSegment] = []
     start_time = time.monotonic()
 
     try:
@@ -324,24 +254,9 @@ def _cmd_start(args: argparse.Namespace) -> None:
                     continue
 
                 if segments:
-                    resolved_segments: list[TranscriptSegment] = []
+                    writer.write_segments(segments)
+                    total_segments += len(segments)
                     for seg in segments:
-                        resolved_speaker = seg.speaker
-                        if speaker_session is not None:
-                            segment_audio = _slice_segment_audio(chunk, seg)
-                            resolved_speaker = speaker_session.resolve_segment(
-                                segment_index=len(all_segments) + len(resolved_segments),
-                                speaker_label=seg.speaker,
-                                text=seg.text,
-                                audio=segment_audio,
-                                sample_rate=chunk.sample_rate,
-                            )
-                        resolved_segments.append(_replace_speaker(seg, resolved_speaker))
-
-                    writer.write_segments(resolved_segments)
-                    all_segments.extend(resolved_segments)
-                    total_segments += len(resolved_segments)
-                    for seg in resolved_segments:
                         logger.info("  %s: %s", seg.speaker, seg.text[:80])
                 else:
                     logger.info("  (no speech detected)")
@@ -356,19 +271,6 @@ def _cmd_start(args: argparse.Namespace) -> None:
         total_segments,
         config.output_path,
     )
-    if speaker_session is not None and _speaker_feature_enabled(getattr(args, "enroll_speakers", None)):
-        if sys.stdin.isatty():
-            speaker_mapping = speaker_session.prompt_for_unknowns(output=sys.stderr)
-            if speaker_mapping:
-                all_segments = [
-                    _replace_speaker(segment, speaker_mapping.get(segment.speaker, segment.speaker))
-                    for segment in all_segments
-                ]
-                rewrite_segments(config.output_format, config.output_path, all_segments)
-                logger.info("Applied %d speaker name mapping(s).", len(speaker_mapping))
-        else:
-            logger.info("Skipping speaker enrollment prompt because stdin is not interactive.")
-
     _maybe_generate_study_document(
         config.output_path,
         enabled=getattr(args, "study_doc", True),
@@ -515,73 +417,6 @@ def _cmd_test_audio(args: argparse.Namespace) -> None:
 
 
 # ---------------------------------------------------------------------------
-# ``speakers`` commands
-# ---------------------------------------------------------------------------
-
-
-def _load_speaker_store(args: argparse.Namespace):
-    speaker_recognition = _load_speaker_recognition_module()
-    store = speaker_recognition.SpeakerProfileStore(getattr(args, "speaker_profiles", None))
-    store.load()
-    return store
-
-
-def _cmd_speakers_list(args: argparse.Namespace) -> None:
-    """List locally enrolled speaker profiles."""
-    store = _load_speaker_store(args)
-    profiles = store.list_profiles()
-    if not profiles:
-        print("No speaker profiles enrolled.")
-        print(f"Profile directory: {store.directory}")
-        return
-
-    print(f"Profile directory: {store.directory}")
-    print(f"{'ID':<36} {'Samples':<7} Name")
-    print(f"{'--':<36} {'-------':<7} ----")
-    for profile in profiles:
-        print(f"{profile.id:<36} {profile.sample_count:<7} {profile.display_name}")
-
-
-def _cmd_speakers_rename(args: argparse.Namespace) -> None:
-    """Rename a locally enrolled speaker profile."""
-    store = _load_speaker_store(args)
-    profile = _find_speaker_profile(store, args.profile)
-    if profile is None:
-        print(f"No speaker profile found for '{args.profile}'.", file=sys.stderr)
-        sys.exit(1)
-
-    store.rename(profile.id, args.name)
-    print(f"Renamed speaker profile to {args.name}.")
-
-
-def _cmd_speakers_remove(args: argparse.Namespace) -> None:
-    """Remove a locally enrolled speaker profile."""
-    store = _load_speaker_store(args)
-    profile = _find_speaker_profile(store, args.profile)
-    if profile is None:
-        print(f"No speaker profile found for '{args.profile}'.", file=sys.stderr)
-        sys.exit(1)
-
-    store.remove(profile.id)
-    print(f"Removed speaker profile {profile.display_name}.")
-
-
-def _cmd_speakers_test_backend(args: argparse.Namespace) -> None:
-    """Load the speaker embedding backend and verify it can compute an embedding."""
-    import numpy as np
-
-    speaker_recognition = _load_speaker_recognition_module()
-    try:
-        backend = speaker_recognition.create_speaker_backend()
-    except speaker_recognition.SpeakerRecognitionUnavailable as exc:
-        print(f"Error: {exc}", file=sys.stderr)
-        sys.exit(1)
-
-    embedding = backend.embed(np.zeros(DEFAULT_SAMPLE_RATE, dtype=np.float32), DEFAULT_SAMPLE_RATE)
-    print(f"Speaker backend OK: embedding dimensions={len(embedding)}")
-
-
-# ---------------------------------------------------------------------------
 # Argument parser
 # ---------------------------------------------------------------------------
 
@@ -666,46 +501,6 @@ def _build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_GEMINI_MODEL,
         help=f"Gemini model for study document generation (default: {DEFAULT_GEMINI_MODEL}).",
     )
-    start.add_argument(
-        "--recognize-speakers",
-        action="store_true",
-        default=None,
-        help="Use local speaker profiles to identify known speakers.",
-    )
-    start.add_argument(
-        "--no-recognize-speakers",
-        action="store_false",
-        dest="recognize_speakers",
-        help="Disable local speaker profile recognition.",
-    )
-    start.add_argument(
-        "--enroll-speakers",
-        action="store_true",
-        default=None,
-        help="Prompt for unknown speaker names after recording and save local voice profiles.",
-    )
-    start.add_argument(
-        "--no-enroll-speakers",
-        action="store_false",
-        dest="enroll_speakers",
-        help="Disable post-recording speaker enrollment prompts.",
-    )
-    start.add_argument(
-        "--speaker-threshold",
-        type=float,
-        default=0.78,
-        help="Similarity threshold for matching saved speaker profiles (default: 0.78).",
-    )
-    start.add_argument(
-        "--speaker-profiles",
-        default=None,
-        help="Speaker profile directory. Defaults to the platform data directory.",
-    )
-    start.add_argument(
-        "--speaker-save-samples",
-        action="store_true",
-        help="Save one local WAV sample for each newly enrolled speaker cluster.",
-    )
     start.set_defaults(func=_cmd_start)
 
     # -- list-devices --------------------------------------------------------
@@ -732,48 +527,6 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     ta.set_defaults(func=_cmd_test_audio)
 
-    # -- speakers -----------------------------------------------------------
-    speakers = sub.add_parser("speakers", help="Manage local speaker profiles.")
-    speakers.add_argument(
-        "--speaker-profiles",
-        default=None,
-        help="Speaker profile directory. Defaults to the platform data directory.",
-    )
-    speakers_sub = speakers.add_subparsers(dest="speakers_command")
-
-    speakers_list = speakers_sub.add_parser("list", help="List speaker profiles.")
-    speakers_list.add_argument(
-        "--speaker-profiles",
-        default=None,
-        help="Speaker profile directory. Defaults to the platform data directory.",
-    )
-    speakers_list.set_defaults(func=_cmd_speakers_list)
-
-    speakers_rename = speakers_sub.add_parser("rename", help="Rename a speaker profile.")
-    speakers_rename.add_argument(
-        "--speaker-profiles",
-        default=None,
-        help="Speaker profile directory. Defaults to the platform data directory.",
-    )
-    speakers_rename.add_argument("profile", help="Speaker profile id or current name.")
-    speakers_rename.add_argument("name", help="New display name.")
-    speakers_rename.set_defaults(func=_cmd_speakers_rename)
-
-    speakers_remove = speakers_sub.add_parser("remove", help="Remove a speaker profile.")
-    speakers_remove.add_argument(
-        "--speaker-profiles",
-        default=None,
-        help="Speaker profile directory. Defaults to the platform data directory.",
-    )
-    speakers_remove.add_argument("profile", help="Speaker profile id or display name.")
-    speakers_remove.set_defaults(func=_cmd_speakers_remove)
-
-    speakers_test_backend = speakers_sub.add_parser(
-        "test-backend",
-        help="Load speaker recognition and compute a test embedding.",
-    )
-    speakers_test_backend.set_defaults(func=_cmd_speakers_test_backend)
-
     return parser
 
 
@@ -790,9 +543,6 @@ def main(argv: list[str] | None = None) -> None:
     if not args.command:
         parser.print_help()
         sys.exit(0)
-
-    if args.command == "speakers" and not getattr(args, "speakers_command", None):
-        parser.parse_args(["speakers", "--help"])
 
     args.func(args)
 

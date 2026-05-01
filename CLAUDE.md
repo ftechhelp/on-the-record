@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**on-the-record** is a cross-platform CLI tool that captures system audio (loopback), transcribes it with optional speaker diarization using OpenAI's API, and writes results in txt/md/json formats. It supports macOS 13+ natively via ScreenCaptureKit, older macOS via BlackHole, Linux via PulseAudio/PipeWire, and Windows via WASAPI.
+**on-the-record** is a cross-platform CLI tool that captures system audio (loopback), transcribes it with optional OpenAI speaker diarization, and writes results in txt/md/json formats. It supports macOS 13+ natively via ScreenCaptureKit, older macOS via BlackHole, Linux via PulseAudio/PipeWire, and Windows via WASAPI.
 
 ## Commands
 

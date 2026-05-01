@@ -24,7 +24,6 @@ def test_build_bundles_project_dotenv_when_present(tmp_path, monkeypatch):
 
     monkeypatch.setattr(build_script.platform, "system", lambda: "Windows")
     monkeypatch.setattr(build_script, "ENV_FILE", env_file)
-    monkeypatch.setattr(build_script, "_prepare_speaker_model", lambda: None)
 
     def fake_run(command, *, cwd, check):
         captured["command"] = command
@@ -38,3 +37,5 @@ def test_build_bundles_project_dotenv_when_present(tmp_path, monkeypatch):
     assert captured["check"] is True
     assert "--add-data" in captured["command"]
     assert f"{env_file};." in captured["command"]
+    assert "speechbrain" not in captured["command"]
+    assert "torch" not in captured["command"]

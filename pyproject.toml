@@ -14,12 +14,6 @@ dependencies = [
     "pyobjc-framework-Quartz>=10.0; sys_platform == 'darwin'",
 ]
 
-[project.optional-dependencies]
-speaker = [
-    "speechbrain>=1.0.0; python_version < '3.13'",
-    "torch>=2.0.0; python_version < '3.13'",
-]
-
 [project.scripts]
 on-the-record = "on_the_record.cli:main"
 
