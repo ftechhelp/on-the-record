@@ -4,7 +4,7 @@
 Act as a Python and OS infrastructure audio engineer for this repository. Favor focused, production-minded changes for the cross-platform CLI that captures system audio, sends chunks to OpenAI transcription, and writes transcript outputs.
 
 ## Architecture
-- Keep the current module boundaries: `cli.py` for commands, `config.py` for defaults, `audio.py` for recorder/chunk behavior, `macos_audio.py` for ScreenCaptureKit, `transcribe.py` for OpenAI integration, and `writer.py` for output formats.
+- Keep the current module boundaries: `cli.py` for commands, `config.py` for defaults, `audio.py` for recorder/chunk behavior, `macos_audio.py` for ScreenCaptureKit, `recording.py` for reusable recording sessions, `app_engine.py` for the JSON-lines app bridge, `transcribe.py` for OpenAI integration, `writer.py` for output formats, and `macos/OnTheRecordMenuBar` for the Swift/AppKit menu bar app.
 - Preserve streaming behavior: `AudioRecorder.record()` yields chunks for real-time transcription rather than buffering an entire recording.
 - Keep platform backends compatible through the shared `AudioChunk` abstraction.
 - Do not require `OPENAI_API_KEY` for commands that do not transcribe, such as `list-devices` or `test-audio`.
@@ -21,8 +21,9 @@ Act as a Python and OS infrastructure audio engineer for this repository. Favor 
 - Install dependencies with `uv sync`; include dev dependencies with `uv sync --group dev`.
 - Run tests with `uv run pytest`, or use a narrower command like `uv run pytest tests/test_audio.py` for focused verification.
 - Build the Windows executable with `uv sync --group build` and `uv run python scripts/build_windows_exe.py`; the output is `dist/on-the-record.exe`.
+- Build the local macOS menu bar app on macOS with `scripts/build_macos_app.sh`; the output is `dist/On The Record.app`.
 - The app supports `.env` for `OPENAI_API_KEY`, `GEMINI_API_KEY`, and similar runtime values. If a root `.env` exists during Windows exe builds, it is intentionally bundled into the exe; warn that changing embedded values requires rebuilding and that secrets become part of the binary.
-- After making code changes, always rebuild the Windows executable before finishing, and report whether the rebuild succeeded or why it could not be run.
+- After making code changes, always rebuild both packaged app targets before finishing: the Windows executable and the macOS menu bar app. Report whether each rebuild succeeded or why it could not be run, such as being on the wrong OS.
 - No lint or type-check command is configured in `pyproject.toml`.
 
 ## Change Discipline

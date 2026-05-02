@@ -218,3 +218,9 @@ __marimo__/
 #CUSTOM
 *.txt
 *.md
+
+# Swift / macOS local builds
+.build/
+DerivedData/
+*.xcuserstate
+.DS_Store

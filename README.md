@@ -139,6 +139,26 @@ For macOS 12 or older:
 
 Multi-Output Devices can disable the normal macOS volume keys. Adjust volume in Audio MIDI Setup or switch back to your normal output when finished.
 
+## macOS Menu Bar App
+
+The repo now includes a local native menu bar app. It is a Swift/AppKit shell that launches the Python engine from this checkout with `uv`, so it is installable for local use but not yet a fully self-contained distributable app.
+
+Build it on macOS:
+
+```bash
+scripts/build_macos_app.sh
+```
+
+Launch it:
+
+```bash
+open "dist/On The Record.app"
+```
+
+The app appears as `OTR` in the menu bar. Use **Show On The Record** to open the companion window, save your OpenAI API key to Keychain, choose an output folder, pick `Both`, `System Only`, or `Microphone Only`, then start recording.
+
+The app writes transcripts to `~/Documents/On The Record` by default. On macOS 13+, grant Screen Recording permission to `On The Record.app` when prompted. If microphone capture is enabled, grant Microphone permission too.
+
 ## Study Documents
 
 If `GEMINI_API_KEY` is set, `start` generates a Markdown study document after recording. Without `--study-output`, Gemini also chooses a short title and the file is named like `2026-05-01-topic-name.md`.
@@ -300,7 +320,7 @@ No lint or type-check command is configured.
 
 ### App engine
 
-`on-the-record-engine` is a JSON-lines process bridge for the planned native macOS app. It is not the normal user-facing CLI; it exists so a Swift app can launch the Python engine, send commands on stdin, and receive structured events on stdout.
+`on-the-record-engine` is the JSON-lines process bridge used by the native macOS app. It is not the normal user-facing CLI; it exists so the Swift app can launch the Python engine, send commands on stdin, and receive structured events on stdout.
 
 ```bash
 # Minimal smoke test
@@ -326,13 +346,14 @@ Main modules:
 
 - `cli.py`: command parsing and terminal-specific behavior
 - `recording.py`: reusable recording/transcription session controller
-- `app_engine.py`: JSON-lines bridge for the future native macOS app
+- `app_engine.py`: JSON-lines bridge for the native macOS app
 - `audio.py`: shared recorder and chunk behavior
 - `macos_audio.py`: ScreenCaptureKit backend
 - `transcribe.py`: OpenAI transcription integration
 - `study.py`: Gemini study-document generation
 - `obsidian.py`: Obsidian export config and copy logic
 - `writer.py`: `txt`, `md`, and `json` transcript writers
+- `macos/OnTheRecordMenuBar`: Swift/AppKit menu bar app
 
 ## License
 
