@@ -16,6 +16,7 @@ dependencies = [
 
 [project.scripts]
 on-the-record = "on_the_record.cli:main"
+on-the-record-engine = "on_the_record.app_engine:main"
 
 [build-system]
 requires = ["hatchling"]

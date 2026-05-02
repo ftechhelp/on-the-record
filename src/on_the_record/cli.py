@@ -11,11 +11,8 @@ from __future__ import annotations
 import argparse
 import importlib
 import logging
-import queue
 import signal
 import sys
-import threading
-import time
 from contextlib import ExitStack
 from datetime import datetime
 from pathlib import Path
@@ -38,6 +35,7 @@ from on_the_record.obsidian import (
     load_obsidian_config,
     save_obsidian_config,
 )
+from on_the_record.recording import CAPTURE_POLL_INTERVAL, RecordingSession
 from on_the_record.study import (
     DEFAULT_GEMINI_MODEL,
     load_gemini_api_key,
@@ -48,8 +46,7 @@ from on_the_record.writer import SUPPORTED_FORMATS, get_writer
 
 logger = logging.getLogger("on_the_record")
 
-_CAPTURE_COMPLETE = object()
-_CAPTURE_POLL_INTERVAL = 0.1
+_CAPTURE_POLL_INTERVAL = CAPTURE_POLL_INTERVAL
 
 
 def _resolve_audio_sources(args: argparse.Namespace) -> tuple[bool, bool]:
@@ -203,52 +200,29 @@ def _resolve_obsidian_config(
     )
 
 
-def _queued_chunks(recorder):
-    """Yield recorded chunks while capture continues on a background thread."""
-
-    chunk_queue: queue.Queue[object] = queue.Queue()
-    capture_error: Exception | None = None
-
-    def _capture() -> None:
-        nonlocal capture_error
-
-        try:
-            for chunk in recorder.record():
-                chunk_queue.put(chunk)
-        except Exception as exc:
-            capture_error = exc
-        finally:
-            chunk_queue.put(_CAPTURE_COMPLETE)
-
-    capture_thread = threading.Thread(
-        target=_capture,
-        name="audio-capture",
-        daemon=True,
-    )
-    capture_thread.start()
-
-    try:
-        while True:
-            try:
-                item = chunk_queue.get(timeout=_CAPTURE_POLL_INTERVAL)
-            except queue.Empty:
-                if capture_error is not None and not capture_thread.is_alive():
-                    raise capture_error
-                continue
-
-            if item is _CAPTURE_COMPLETE:
-                if capture_error is not None:
-                    raise capture_error
-                break
-            yield item
-    finally:
-        recorder.stop()
-        capture_thread.join()
-
-
 def _load_audio_module():
     """Import audio backends only when a command actually needs them."""
     return importlib.import_module("on_the_record.audio")
+
+
+def _log_recording_event(event_type: str, payload: dict) -> None:
+    if event_type == "transcription_started":
+        logger.info(
+            "Transcribing chunk %d (offset %.1f s) …",
+            payload["chunk_index"],
+            payload["offset"],
+        )
+    elif event_type == "transcription_failed":
+        logger.error(
+            "Transcription failed for chunk %d: %s",
+            payload["chunk_index"],
+            payload["error"],
+        )
+    elif event_type == "segments_written":
+        for segment in payload["segments"]:
+            logger.info("  %s: %s", segment["speaker"], segment["text"][:80])
+    elif event_type == "no_speech_detected":
+        logger.info("  (no speech detected)")
 
 
 # ---------------------------------------------------------------------------
@@ -339,75 +313,41 @@ def _cmd_start(args: argparse.Namespace) -> None:
             )
     logger.info("Press Ctrl+C to stop recording.\n")
 
-    recorder = audio_module.AudioRecorder(
-        sample_rate=config.sample_rate,
-        channels=config.channels,
-        chunk_seconds=config.chunk_seconds,
-        device_name=config.device_name,
-        include_system_audio=config.include_system_audio,
-        include_microphone=config.include_microphone,
-        silence_threshold=config.silence_threshold,
+    session = RecordingSession(
+        config,
+        audio_module=audio_module,
+        writer_factory=get_writer,
+        transcribe=transcribe_chunk,
+        event_callback=_log_recording_event,
+        poll_interval=_CAPTURE_POLL_INTERVAL,
     )
 
     # Graceful shutdown on Ctrl+C / SIGTERM
     def _shutdown(signum, frame):
         logger.info("Received signal %d — stopping …", signum)
-        recorder.stop()
+        session.request_stop()
 
     signal.signal(signal.SIGINT, _shutdown)
     signal.signal(signal.SIGTERM, _shutdown)
 
-    writer = get_writer(config.output_format, config.output_path)
-    total_segments = 0
-    start_time = time.monotonic()
-
     try:
-        with writer:
-            for chunk in _queued_chunks(recorder):
-                logger.info(
-                    "Transcribing chunk %d (offset %.1f s) …",
-                    chunk.chunk_index,
-                    chunk.start_time_offset,
-                )
-                wav_bytes = chunk.to_wav()
-
-                try:
-                    segments = transcribe_chunk(
-                        wav_bytes,
-                        api_key=config.api_key,
-                        model=config.model,
-                        chunk_offset=chunk.start_time_offset,
-                    )
-                except Exception as exc:
-                    logger.error(
-                        "Transcription failed for chunk %d: %s", chunk.chunk_index, exc
-                    )
-                    continue
-
-                if segments:
-                    writer.write_segments(segments)
-                    total_segments += len(segments)
-                    for seg in segments:
-                        logger.info("  %s: %s", seg.speaker, seg.text[:80])
-                else:
-                    logger.info("  (no speech detected)")
+        result = session.run()
     except Exception as exc:
         logger.error("Fatal error: %s", exc)
         sys.exit(1)
 
-    elapsed = time.monotonic() - start_time
     logger.info(
         "Done. Recorded %.0f s, wrote %d segment(s) to %s",
-        elapsed,
-        total_segments,
-        config.output_path,
+        result.elapsed_seconds,
+        result.total_segments,
+        result.output_path,
     )
     _maybe_generate_study_document(
         config.output_path,
         enabled=getattr(args, "study_doc", True),
         output_path=getattr(args, "study_output", None),
         model=getattr(args, "gemini_model", DEFAULT_GEMINI_MODEL),
-        total_segments=total_segments,
+        total_segments=result.total_segments,
         obsidian_enabled=getattr(args, "obsidian", None),
         obsidian_vault=getattr(args, "obsidian_vault", None),
         obsidian_folder=getattr(args, "obsidian_folder", None),

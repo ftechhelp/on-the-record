@@ -298,6 +298,17 @@ uv run pytest
 
 No lint or type-check command is configured.
 
+### App engine
+
+`on-the-record-engine` is a JSON-lines process bridge for the planned native macOS app. It is not the normal user-facing CLI; it exists so a Swift app can launch the Python engine, send commands on stdin, and receive structured events on stdout.
+
+```bash
+# Minimal smoke test
+printf '%s\n' '{"id":"p","command":"ping"}' '{"id":"s","command":"shutdown"}' | uv run on-the-record-engine
+```
+
+Supported commands currently include `ping`, `list_devices`, `start_recording`, `stop_recording`, and `shutdown`. Recording commands emit events such as `start_accepted`, `recording_started`, `transcription_started`, `segments_written`, `recording_finished`, and `recording_error`.
+
 ## Architecture
 
 ```text
@@ -313,7 +324,9 @@ platform audio capture
 
 Main modules:
 
-- `cli.py`: command parsing and recording workflow
+- `cli.py`: command parsing and terminal-specific behavior
+- `recording.py`: reusable recording/transcription session controller
+- `app_engine.py`: JSON-lines bridge for the future native macOS app
 - `audio.py`: shared recorder and chunk behavior
 - `macos_audio.py`: ScreenCaptureKit backend
 - `transcribe.py`: OpenAI transcription integration
