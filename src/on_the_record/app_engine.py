@@ -27,6 +27,9 @@ from on_the_record.config import (
     load_dotenv,
 )
 from on_the_record.recording import RecordingSession
+from on_the_record.study import DEFAULT_GEMINI_MODEL, write_named_study_document
+
+StudyDocumentWriter = Callable[..., Path]
 
 
 class JsonLineEngine:
@@ -39,11 +42,13 @@ class JsonLineEngine:
         output_stream: TextIO = sys.stdout,
         session_factory: Callable[..., RecordingSession] = RecordingSession,
         audio_module_loader: Callable[[], Any] | None = None,
+        study_document_writer: StudyDocumentWriter = write_named_study_document,
     ) -> None:
         self.input_stream = input_stream
         self.output_stream = output_stream
         self.session_factory = session_factory
         self.audio_module_loader = audio_module_loader or self._load_audio_module
+        self.study_document_writer = study_document_writer
         self._session: RecordingSession | None = None
         self._session_thread: threading.Thread | None = None
         self._write_lock = threading.Lock()
@@ -128,7 +133,7 @@ class JsonLineEngine:
         self._session = session
         self._session_thread = threading.Thread(
             target=self._run_session,
-            args=(session, request_id),
+            args=(session, request_id, build_study_options(payload)),
             name="app-recording-session",
             daemon=True,
         )
@@ -142,12 +147,18 @@ class JsonLineEngine:
         self._session.request_stop()
         self.emit("stop_requested", request_id=request_id)
 
-    def _run_session(self, session: RecordingSession, request_id: Any) -> None:
+    def _run_session(
+        self,
+        session: RecordingSession,
+        request_id: Any,
+        study_options: dict[str, Any],
+    ) -> None:
         try:
             result = session.run()
         except Exception as exc:
             self.emit("recording_error", request_id=request_id, error=str(exc))
         else:
+            self._maybe_generate_study_document(result, request_id, study_options)
             self.emit(
                 "recording_finished",
                 request_id=request_id,
@@ -163,6 +174,52 @@ class JsonLineEngine:
         payload: dict[str, Any],
     ) -> None:
         self.emit(event_type, **payload)
+
+    def _maybe_generate_study_document(
+        self,
+        result,
+        request_id: Any,
+        options: dict[str, Any],
+    ) -> None:
+        if not options["enabled"]:
+            return
+        if result.total_segments == 0:
+            self.emit(
+                "study_doc_skipped",
+                request_id=request_id,
+                reason="no_segments",
+            )
+            return
+        if not options["api_key"]:
+            self.emit(
+                "study_doc_skipped",
+                request_id=request_id,
+                reason="missing_gemini_api_key",
+            )
+            return
+
+        self.emit(
+            "study_doc_started",
+            request_id=request_id,
+            transcript_path=result.output_path,
+            model=options["model"],
+        )
+        try:
+            written_path = self.study_document_writer(
+                result.output_path,
+                options["output_path"],
+                api_key=options["api_key"],
+                model=options["model"],
+            )
+        except Exception as exc:
+            self.emit("study_doc_failed", request_id=request_id, error=str(exc))
+            return
+
+        self.emit(
+            "study_doc_written",
+            request_id=request_id,
+            output_path=str(written_path),
+        )
 
     @staticmethod
     def _load_audio_module():
@@ -205,6 +262,20 @@ def build_config(payload: dict[str, Any]) -> Config:
         output_format=output_format,
         model=model,
     )
+
+
+def build_study_options(payload: dict[str, Any]) -> dict[str, Any]:
+    """Build Gemini study-document options from a JSON command payload."""
+    gemini_api_key = str(
+        payload.get("gemini_api_key") or os.environ.get("GEMINI_API_KEY") or ""
+    ).strip()
+    output_path = payload.get("study_output_path")
+    return {
+        "enabled": bool(payload.get("study_doc_enabled", False)),
+        "api_key": gemini_api_key,
+        "model": str(payload.get("gemini_model") or DEFAULT_GEMINI_MODEL),
+        "output_path": str(output_path) if output_path else None,
+    }
 
 
 def _default_output_path(output_format: str) -> str:

@@ -16,6 +16,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var settings: AppSettings = AppDelegate.defaultSettings()
     private var isRecording = false
     private var lastTranscriptPath: String?
+    private var lastStudyDocumentPath: String?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         settings = loadSettings()
@@ -166,6 +167,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             showAlert("Add your OpenAI API key", detail: "Save an API key before starting a recording from the app.")
             return
         }
+        if settings.studyDocEnabled && settings.geminiAPIKey.isEmpty {
+            showWindow()
+            showAlert("Add your Gemini API key", detail: "Save a Gemini API key or turn off study document generation before starting a recording.")
+            return
+        }
 
         saveSettings(settings, showConfirmation: false)
         startEngine()
@@ -184,6 +190,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             "include_system_audio": settings.includesSystemAudio,
             "include_microphone": settings.includesMicrophone,
             "diarize": settings.diarize,
+            "study_doc_enabled": settings.studyDocEnabled,
+            "gemini_api_key": settings.geminiAPIKey,
+            "gemini_model": settings.geminiModel,
         ]
 
         do {
@@ -259,6 +268,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             setRecording(false, status: "Finished")
             revealMenuItem?.isEnabled = lastTranscriptPath != nil
             appendLog("Recording finished")
+        case "study_doc_started":
+            setRecording(false, status: "Generating study document")
+            appendLog("Generating Gemini study document")
+        case "study_doc_written":
+            let outputPath = event["output_path"] as? String
+            lastStudyDocumentPath = outputPath
+            if let outputPath {
+                appendLog("Study document written to \(outputPath)")
+            } else {
+                appendLog("Study document written")
+            }
+        case "study_doc_skipped":
+            if let reason = event["reason"] as? String {
+                appendLog("Study document skipped: \(reason)")
+            }
+        case "study_doc_failed":
+            appendLog(event["error"] as? String ?? "Study document generation failed")
         case "recording_stopped":
             setRecording(false, status: "Stopped")
         case "devices":
@@ -320,9 +346,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         UserDefaults.standard.set(newSettings.sourceMode, forKey: "sourceMode")
         UserDefaults.standard.set(newSettings.chunkSeconds, forKey: "chunkSeconds")
         UserDefaults.standard.set(newSettings.diarize, forKey: "diarize")
+        UserDefaults.standard.set(newSettings.studyDocEnabled, forKey: "studyDocEnabled")
+        UserDefaults.standard.set(newSettings.geminiModel, forKey: "geminiModel")
 
         do {
             try KeychainStore.save(newSettings.apiKey, account: "OPENAI_API_KEY")
+            try KeychainStore.save(newSettings.geminiAPIKey, account: "GEMINI_API_KEY")
             if showConfirmation {
                 appendLog("Settings saved")
             }
@@ -335,9 +364,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let defaults = UserDefaults.standard
         var loadedSettings = AppDelegate.defaultSettings()
         loadedSettings.apiKey = KeychainStore.read(account: "OPENAI_API_KEY") ?? ""
+        loadedSettings.geminiAPIKey = KeychainStore.read(account: "GEMINI_API_KEY") ?? ""
         loadedSettings.outputDirectory = defaults.string(forKey: "outputDirectory") ?? loadedSettings.outputDirectory
         loadedSettings.format = defaults.string(forKey: "format") ?? loadedSettings.format
         loadedSettings.sourceMode = defaults.string(forKey: "sourceMode") ?? loadedSettings.sourceMode
+        loadedSettings.geminiModel = defaults.string(forKey: "geminiModel") ?? loadedSettings.geminiModel
 
         let savedChunkSeconds = defaults.integer(forKey: "chunkSeconds")
         if savedChunkSeconds > 0 {
@@ -345,6 +376,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         if defaults.object(forKey: "diarize") != nil {
             loadedSettings.diarize = defaults.bool(forKey: "diarize")
+        }
+        if defaults.object(forKey: "studyDocEnabled") != nil {
+            loadedSettings.studyDocEnabled = defaults.bool(forKey: "studyDocEnabled")
         }
 
         return loadedSettings
@@ -358,11 +392,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         return AppSettings(
             apiKey: "",
+            geminiAPIKey: "",
             outputDirectory: outputDirectory,
             format: "txt",
             sourceMode: "both",
             chunkSeconds: 15,
-            diarize: true
+            diarize: true,
+            studyDocEnabled: false,
+            geminiModel: "gemini-3-flash-preview"
         )
     }
 

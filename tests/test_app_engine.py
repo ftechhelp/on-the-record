@@ -5,8 +5,9 @@ from __future__ import annotations
 import io
 import json
 from dataclasses import dataclass
+from pathlib import Path
 
-from on_the_record.app_engine import JsonLineEngine, build_config
+from on_the_record.app_engine import JsonLineEngine, build_config, build_study_options
 from on_the_record.recording import RecordingResult
 
 
@@ -117,6 +118,116 @@ def test_engine_starts_recording_session():
     }
 
 
+def test_engine_generates_study_document_when_enabled():
+    output = io.StringIO()
+    calls = []
+
+    class FakeSession:
+        def __init__(self, config, *, event_callback):
+            self.event_callback = event_callback
+
+        def run(self):
+            return RecordingResult(
+                elapsed_seconds=1.0,
+                total_segments=2,
+                output_path="out.txt",
+            )
+
+        def request_stop(self):
+            return None
+
+    def fake_study_writer(transcript_path, output_path, *, api_key, model):
+        calls.append((transcript_path, output_path, api_key, model))
+        return Path("study.md")
+
+    engine = JsonLineEngine(
+        input_stream=io.StringIO(),
+        output_stream=output,
+        session_factory=FakeSession,
+        study_document_writer=fake_study_writer,
+    )
+
+    engine.handle_line(
+        json.dumps(
+            {
+                "id": "start",
+                "command": "start_recording",
+                "payload": {
+                    "api_key": "test-key",
+                    "output_path": "out.txt",
+                    "study_doc_enabled": True,
+                    "gemini_api_key": "gemini-key",
+                    "gemini_model": "gemini-test",
+                },
+            }
+        )
+    )
+    assert engine._session_thread is not None
+    engine._session_thread.join(timeout=1)
+
+    events = _events(output)
+    assert calls == [("out.txt", None, "gemini-key", "gemini-test")]
+    assert events[1] == {
+        "event": "study_doc_started",
+        "request_id": "start",
+        "transcript_path": "out.txt",
+        "model": "gemini-test",
+    }
+    assert events[2] == {
+        "event": "study_doc_written",
+        "request_id": "start",
+        "output_path": "study.md",
+    }
+
+
+def test_engine_skips_enabled_study_document_without_gemini_key():
+    output = io.StringIO()
+
+    class FakeSession:
+        def __init__(self, config, *, event_callback):
+            return None
+
+        def run(self):
+            return RecordingResult(
+                elapsed_seconds=1.0,
+                total_segments=1,
+                output_path="out.txt",
+            )
+
+        def request_stop(self):
+            return None
+
+    engine = JsonLineEngine(
+        input_stream=io.StringIO(),
+        output_stream=output,
+        session_factory=FakeSession,
+    )
+
+    engine.handle_line(
+        json.dumps(
+            {
+                "id": "start",
+                "command": "start_recording",
+                "payload": {
+                    "api_key": "test-key",
+                    "output_path": "out.txt",
+                    "study_doc_enabled": True,
+                    "gemini_api_key": " ",
+                },
+            }
+        )
+    )
+    assert engine._session_thread is not None
+    engine._session_thread.join(timeout=1)
+
+    events = _events(output)
+    assert events[1] == {
+        "event": "study_doc_skipped",
+        "request_id": "start",
+        "reason": "missing_gemini_api_key",
+    }
+
+
 def test_build_config_uses_app_payload_values():
     config = build_config(
         {
@@ -136,3 +247,21 @@ def test_build_config_uses_app_payload_values():
     assert config.include_system_audio is False
     assert config.include_microphone is True
     assert config.model == "gpt-4o-transcribe-diarize"
+
+
+def test_build_study_options_uses_app_payload_values():
+    options = build_study_options(
+        {
+            "study_doc_enabled": True,
+            "gemini_api_key": "gemini-key",
+            "gemini_model": "gemini-test",
+            "study_output_path": "study.md",
+        }
+    )
+
+    assert options == {
+        "enabled": True,
+        "api_key": "gemini-key",
+        "model": "gemini-test",
+        "output_path": "study.md",
+    }

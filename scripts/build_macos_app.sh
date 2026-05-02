@@ -54,6 +54,8 @@ rm -rf "$APP_DIR"
 mkdir -p "$DIST_DIR"
 ditto --norsrc "$STAGING_APP_DIR" "$APP_DIR"
 xattr -cr "$APP_DIR"
+xattr -d com.apple.FinderInfo "$APP_DIR" 2>/dev/null || true
+xattr -d 'com.apple.fileprovider.fpfs#P' "$APP_DIR" 2>/dev/null || true
 
 echo "Built $APP_DIR"
 echo "Open it with: open '$APP_DIR'"

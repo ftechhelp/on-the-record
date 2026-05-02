@@ -157,6 +157,8 @@ open "dist/On The Record.app"
 
 The app appears as `OTR` in the menu bar. Use **Show On The Record** to open the companion window, save your OpenAI API key to Keychain, choose an output folder, pick `Both`, `System Only`, or `Microphone Only`, then start recording.
 
+To generate study documents from the app, also save your Gemini API key in the companion window and enable **Generate Gemini study document**. The app uses `gemini-3-flash-preview` by default and writes the study document next to the transcript.
+
 The app writes transcripts to `~/Documents/On The Record` by default. On macOS 13+, grant Screen Recording permission to `On The Record.app` when prompted. If microphone capture is enabled, grant Microphone permission too.
 
 ## Study Documents

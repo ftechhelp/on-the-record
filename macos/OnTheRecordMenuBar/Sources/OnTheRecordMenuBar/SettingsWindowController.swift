@@ -2,11 +2,14 @@ import AppKit
 
 struct AppSettings {
     var apiKey: String
+    var geminiAPIKey: String
     var outputDirectory: String
     var format: String
     var sourceMode: String
     var chunkSeconds: Int
     var diarize: Bool
+    var studyDocEnabled: Bool
+    var geminiModel: String
 
     var includesSystemAudio: Bool {
         sourceMode == "both" || sourceMode == "system"
@@ -25,11 +28,14 @@ final class SettingsWindowController: NSWindowController {
 
     private let statusLabel = NSTextField(labelWithString: "Engine not started")
     private let apiKeyField = NSSecureTextField(frame: .zero)
+    private let geminiKeyField = NSSecureTextField(frame: .zero)
     private let outputField = NSTextField(frame: .zero)
     private let sourcePopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let formatPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let chunkField = NSTextField(frame: .zero)
     private let diarizeCheckbox = NSButton(checkboxWithTitle: "Speaker diarization", target: nil, action: nil)
+    private let studyDocCheckbox = NSButton(checkboxWithTitle: "Generate Gemini study document", target: nil, action: nil)
+    private let geminiModelField = NSTextField(frame: .zero)
     private let transcriptTextView = NSTextView(frame: .zero)
     private let logTextView = NSTextView(frame: .zero)
     private let startButton = NSButton(title: "Start", target: nil, action: nil)
@@ -37,13 +43,13 @@ final class SettingsWindowController: NSWindowController {
 
     init(settings: AppSettings) {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 680, height: 640),
+            contentRect: NSRect(x: 0, y: 0, width: 720, height: 760),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
         )
         window.title = "On The Record"
-        window.minSize = NSSize(width: 560, height: 520)
+        window.minSize = NSSize(width: 600, height: 620)
         super.init(window: window)
         buildInterface()
         apply(settings)
@@ -56,21 +62,29 @@ final class SettingsWindowController: NSWindowController {
     var currentSettings: AppSettings {
         AppSettings(
             apiKey: apiKeyField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines),
+            geminiAPIKey: geminiKeyField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines),
             outputDirectory: (outputField.stringValue as NSString).expandingTildeInPath,
             format: formatPopup.selectedItem?.title.lowercased() ?? "txt",
             sourceMode: selectedSourceMode(),
             chunkSeconds: max(5, chunkField.integerValue),
-            diarize: diarizeCheckbox.state == .on
+            diarize: diarizeCheckbox.state == .on,
+            studyDocEnabled: studyDocCheckbox.state == .on,
+            geminiModel: geminiModelField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? "gemini-3-flash-preview"
+                : geminiModelField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         )
     }
 
     func apply(_ settings: AppSettings) {
         apiKeyField.stringValue = settings.apiKey
+        geminiKeyField.stringValue = settings.geminiAPIKey
         outputField.stringValue = settings.outputDirectory
         formatPopup.selectItem(withTitle: settings.format.uppercased())
         selectSourceMode(settings.sourceMode)
         chunkField.integerValue = settings.chunkSeconds
         diarizeCheckbox.state = settings.diarize ? .on : .off
+        studyDocCheckbox.state = settings.studyDocEnabled ? .on : .off
+        geminiModelField.stringValue = settings.geminiModel
     }
 
     func setStatus(_ text: String, isRecording: Bool) {
@@ -111,17 +125,22 @@ final class SettingsWindowController: NSWindowController {
         rootStack.addArrangedSubview(statusLabel)
 
         apiKeyField.placeholderString = "OpenAI API key"
+        geminiKeyField.placeholderString = "Gemini API key"
         outputField.placeholderString = "Output folder"
         sourcePopup.addItems(withTitles: ["Both", "System Only", "Microphone Only"])
         formatPopup.addItems(withTitles: ["TXT", "MD", "JSON"])
         chunkField.placeholderString = "15"
+        geminiModelField.placeholderString = "gemini-3-flash-preview"
 
         rootStack.addArrangedSubview(labeledRow("OpenAI API key", apiKeyField))
+        rootStack.addArrangedSubview(labeledRow("Gemini API key", geminiKeyField))
         rootStack.addArrangedSubview(labeledRow("Output folder", outputFolderRow()))
         rootStack.addArrangedSubview(labeledRow("Audio source", sourcePopup))
         rootStack.addArrangedSubview(labeledRow("Transcript format", formatPopup))
         rootStack.addArrangedSubview(labeledRow("Chunk seconds", chunkField))
         rootStack.addArrangedSubview(diarizeCheckbox)
+        rootStack.addArrangedSubview(studyDocCheckbox)
+        rootStack.addArrangedSubview(labeledRow("Gemini model", geminiModelField))
 
         let buttonRow = NSStackView(views: [saveButton(), startButton, stopButton])
         buttonRow.orientation = .horizontal
@@ -129,9 +148,9 @@ final class SettingsWindowController: NSWindowController {
         rootStack.addArrangedSubview(buttonRow)
 
         rootStack.addArrangedSubview(sectionLabel("Live transcript"))
-        rootStack.addArrangedSubview(scrollView(for: transcriptTextView, height: 170))
+        rootStack.addArrangedSubview(scrollView(for: transcriptTextView, height: 180))
         rootStack.addArrangedSubview(sectionLabel("Engine log"))
-        rootStack.addArrangedSubview(scrollView(for: logTextView, height: 120))
+        rootStack.addArrangedSubview(scrollView(for: logTextView, height: 130))
 
         let contentView = NSView()
         contentView.addSubview(rootStack)
