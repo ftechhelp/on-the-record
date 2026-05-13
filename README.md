@@ -44,7 +44,7 @@ OPENAI_API_KEY=sk-...
 GEMINI_API_KEY=...
 ```
 
-Real environment variables take precedence over `.env` values. `list-devices` and `test-audio` do not require `OPENAI_API_KEY`.
+Real environment variables take precedence over `.env` values when running from source. `list-devices` and `test-audio` do not require `OPENAI_API_KEY`.
 
 ## Install
 
@@ -309,7 +309,7 @@ uv run python scripts/build_windows_exe.py
 
 The output is `dist/on-the-record.exe`.
 
-If a root `.env` exists during the build, it is bundled into the executable. Rebuild after changing embedded values, and treat the executable as containing those secrets.
+If a root `.env` exists during the build, it is bundled into the executable and those bundled values take precedence when the executable runs. Rebuild after changing embedded values, and treat the executable as containing those secrets.
 
 ## Development
 

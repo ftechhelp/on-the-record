@@ -54,6 +54,24 @@ def test_load_api_key_uses_dotenv_without_overriding_environment(tmp_path, monke
     assert config.os.environ["INLINE"] == "value"
 
 
+def test_load_api_key_prefers_pyinstaller_bundled_dotenv(tmp_path, monkeypatch):
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / ".env").write_text(
+        "OPENAI_API_KEY=from-bundle\n"
+        "GEMINI_API_KEY=gemini-from-bundle\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("OPENAI_API_KEY", "from-parent-env")
+    monkeypatch.setattr(config.sys, "_MEIPASS", str(bundle_dir), raising=False)
+    monkeypatch.chdir(tmp_path)
+
+    assert config.load_api_key() == "from-bundle"
+    assert config.os.environ["OPENAI_API_KEY"] == "from-bundle"
+    assert config.os.environ["GEMINI_API_KEY"] == "gemini-from-bundle"
+
+
 def test_dotenv_paths_include_pyinstaller_bundle(monkeypatch, tmp_path):
     bundle_dir = tmp_path / "bundle"
     exe_dir = tmp_path / "dist"

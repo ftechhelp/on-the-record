@@ -47,9 +47,13 @@ def _api_key_setup_hint(os_name: str | None = None) -> str:
 
 
 def load_dotenv() -> None:
-    """Load environment values from .env files without overriding real env vars."""
+    """Load environment values from .env files."""
+    bundled_path = _bundled_dotenv_path()
+    if bundled_path is not None and bundled_path.is_file():
+        _load_dotenv_file(bundled_path, override=True)
+
     for path in _dotenv_paths():
-        if path.is_file():
+        if path != bundled_path and path.is_file():
             _load_dotenv_file(path)
 
 
@@ -75,11 +79,19 @@ def _dotenv_paths() -> list[Path]:
     return paths
 
 
-def _load_dotenv_file(path: Path) -> None:
+def _bundled_dotenv_path() -> Path | None:
+    """Return the PyInstaller-bundled .env path, when running from a bundle."""
+    bundle_root = getattr(sys, "_MEIPASS", None)
+    if bundle_root:
+        return (Path(bundle_root) / ".env").resolve()
+    return None
+
+
+def _load_dotenv_file(path: Path, *, override: bool = False) -> None:
     """Load simple KEY=VALUE pairs from *path*."""
     for line in path.read_text(encoding="utf-8").splitlines():
         key, value = _parse_dotenv_line(line)
-        if key and key not in os.environ:
+        if key and (override or key not in os.environ):
             os.environ[key] = value
 
 
