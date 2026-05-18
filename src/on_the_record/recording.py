@@ -16,7 +16,7 @@ from dataclasses import asdict, dataclass
 from typing import Any
 
 from on_the_record.config import Config
-from on_the_record.transcribe import TranscriptSegment, transcribe_chunk
+from on_the_record.transcribe import TranscriptSegment, UsageInfo, transcribe_chunk
 from on_the_record.writer import get_writer
 
 logger = logging.getLogger("on_the_record.recording")
@@ -26,7 +26,7 @@ _CAPTURE_COMPLETE = object()
 
 RecordingEventCallback = Callable[[str, dict[str, Any]], None]
 WriterFactory = Callable[[str, str], Any]
-TranscribeFunction = Callable[..., list[TranscriptSegment]]
+TranscribeFunction = Callable[..., tuple[list[TranscriptSegment], UsageInfo]]
 
 
 @dataclass(frozen=True)
@@ -36,6 +36,7 @@ class RecordingResult:
     elapsed_seconds: float
     total_segments: int
     output_path: str
+    usage: UsageInfo | None = None
 
 
 def load_audio_module():
@@ -133,6 +134,7 @@ class RecordingSession:
             self.config.output_path,
         )
         total_segments = 0
+        total_usage: UsageInfo | None = None
         start_time = time.monotonic()
 
         self._emit(
@@ -160,12 +162,13 @@ class RecordingSession:
                     wav_bytes = chunk.to_wav()
 
                     try:
-                        segments = self.transcribe(
+                        segments, usage = self.transcribe(
                             wav_bytes,
                             api_key=self.config.api_key,
                             model=self.config.model,
                             chunk_offset=chunk.start_time_offset,
                         )
+                        total_usage = usage if total_usage is None else total_usage + usage
                     except Exception as exc:
                         logger.error(
                             "Transcription failed for chunk %d: %s",
@@ -202,6 +205,7 @@ class RecordingSession:
             elapsed_seconds=elapsed,
             total_segments=total_segments,
             output_path=self.config.output_path,
+            usage=total_usage,
         )
         self._emit(
             "recording_stopped",

@@ -342,6 +342,14 @@ def _cmd_start(args: argparse.Namespace) -> None:
         result.total_segments,
         result.output_path,
     )
+    if result.usage is not None:
+        u = result.usage
+        logger.info(
+            "Token usage: %d input / %d output — estimated cost: $%.4f USD",
+            u.input_tokens,
+            u.output_tokens,
+            u.cost_usd,
+        )
     _maybe_generate_study_document(
         config.output_path,
         enabled=getattr(args, "study_doc", True),

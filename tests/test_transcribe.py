@@ -9,6 +9,7 @@ import pytest
 
 from on_the_record.transcribe import (
     TranscriptSegment,
+    UsageInfo,
     _parse_diarized,
     _parse_verbose,
     transcribe_chunk,
@@ -156,16 +157,18 @@ class TestTranscribeChunk:
         )
         mock_client.audio.transcriptions.create.return_value = fake_resp
 
-        result = transcribe_chunk(
+        segments, usage = transcribe_chunk(
             b"fake-wav",
             api_key="sk-test",
             model="gpt-4o-transcribe-diarize",
             chunk_offset=0.0,
         )
 
-        assert len(result) == 1
-        assert result[0].speaker == "Alice"
-        assert result[0].text == "Hello"
+        assert len(segments) == 1
+        assert segments[0].speaker == "Alice"
+        assert segments[0].text == "Hello"
+        assert isinstance(usage, UsageInfo)
+        assert usage.model == "gpt-4o-transcribe-diarize"
 
         # Verify the API was called with diarized_json format
         call_kwargs = mock_client.audio.transcriptions.create.call_args.kwargs
@@ -184,15 +187,17 @@ class TestTranscribeChunk:
         )
         mock_client.audio.transcriptions.create.return_value = fake_resp
 
-        result = transcribe_chunk(
+        segments, usage = transcribe_chunk(
             b"fake-wav",
             api_key="sk-test",
             model="gpt-4o-transcribe",
             chunk_offset=0.0,
         )
 
-        assert len(result) == 1
-        assert result[0].speaker == "Speaker"
+        assert len(segments) == 1
+        assert segments[0].speaker == "Speaker"
+        assert isinstance(usage, UsageInfo)
+        assert usage.model == "gpt-4o-transcribe"
 
         call_kwargs = mock_client.audio.transcriptions.create.call_args.kwargs
         assert call_kwargs["response_format"] == "verbose_json"

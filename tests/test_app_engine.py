@@ -114,6 +114,7 @@ def test_engine_starts_recording_session():
             "elapsed_seconds": 1.0,
             "total_segments": 2,
             "output_path": "out.txt",
+            "usage": None,
         },
     }
 

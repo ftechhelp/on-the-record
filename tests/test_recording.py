@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 from on_the_record.config import Config
 from on_the_record.recording import RecordingSession
-from on_the_record.transcribe import TranscriptSegment
+from on_the_record.transcribe import TranscriptSegment, UsageInfo
 
 
 class _FakeChunk:
@@ -59,7 +59,7 @@ def test_recording_session_writes_segments_and_emits_events():
                 start=chunk_offset,
                 end=chunk_offset + 1,
             )
-        ]
+        ], UsageInfo(model=model, input_tokens=100, output_tokens=50)
 
     session = RecordingSession(
         Config(api_key="test-key", output_path="transcript.txt"),
@@ -73,6 +73,9 @@ def test_recording_session_writes_segments_and_emits_events():
 
     assert result.total_segments == 2
     assert result.output_path == "transcript.txt"
+    assert result.usage is not None
+    assert result.usage.input_tokens == 200  # 2 chunks × 100
+    assert result.usage.output_tokens == 100  # 2 chunks × 50
     assert writer.written == [["chunk-0"], ["chunk-1"]]
     assert writer.finalized is True
     assert [event_type for event_type, _ in events] == [
@@ -99,7 +102,7 @@ def test_recording_session_continues_after_transcription_error():
                 start=chunk_offset,
                 end=chunk_offset + 1,
             )
-        ]
+        ], UsageInfo(model=model, input_tokens=80, output_tokens=20)
 
     session = RecordingSession(
         Config(api_key="test-key", output_path="transcript.txt"),

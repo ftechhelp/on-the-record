@@ -10,7 +10,7 @@ import pytest
 
 from on_the_record import cli
 from on_the_record.obsidian import ObsidianConfig
-from on_the_record.transcribe import TranscriptSegment
+from on_the_record.transcribe import TranscriptSegment, UsageInfo
 
 
 def test_start_does_not_load_audio_before_api_key(monkeypatch):
@@ -171,7 +171,7 @@ def test_start_keeps_capturing_while_transcribing(monkeypatch):
                 start=chunk_offset,
                 end=chunk_offset + 1,
             )
-        ]
+        ], UsageInfo(model=model)
 
     fake_audio_module = SimpleNamespace(
         AudioRecorder=FakeRecorder,
@@ -214,7 +214,7 @@ def test_start_exits_when_capture_thread_fails(monkeypatch):
                 start=chunk_offset,
                 end=chunk_offset + 1,
             )
-        ]
+        ], UsageInfo(model=model)
 
     fake_audio_module = SimpleNamespace(
         AudioRecorder=FakeRecorder,
@@ -269,7 +269,7 @@ def test_start_drains_buffered_chunks_after_stop(monkeypatch):
                 start=chunk_offset,
                 end=chunk_offset + 1,
             )
-        ]
+        ], UsageInfo(model=model)
 
     fake_audio_module = SimpleNamespace(
         AudioRecorder=FakeRecorder,
@@ -317,7 +317,7 @@ def test_start_polls_while_waiting_for_first_chunk(monkeypatch):
                 start=chunk_offset,
                 end=chunk_offset + 1,
             )
-        ]
+        ], UsageInfo(model=model)
 
     fake_audio_module = SimpleNamespace(
         AudioRecorder=FakeRecorder,
@@ -367,7 +367,7 @@ def test_start_generates_study_document_after_recording(monkeypatch):
                 start=chunk_offset,
                 end=chunk_offset + 1,
             )
-        ]
+        ], UsageInfo(model=model)
 
     fake_audio_module = SimpleNamespace(
         AudioRecorder=FakeRecorder,
@@ -424,7 +424,7 @@ def test_start_skips_study_document_without_gemini_key(monkeypatch):
                 start=chunk_offset,
                 end=chunk_offset + 1,
             )
-        ]
+        ], UsageInfo(model=model)
 
     fake_audio_module = SimpleNamespace(
         AudioRecorder=FakeRecorder,
@@ -472,7 +472,7 @@ def test_start_honors_no_study_doc(monkeypatch):
                 start=chunk_offset,
                 end=chunk_offset + 1,
             )
-        ]
+        ], UsageInfo(model=model)
 
     fake_audio_module = SimpleNamespace(
         AudioRecorder=FakeRecorder,
@@ -521,7 +521,7 @@ def test_start_exports_study_document_to_obsidian(monkeypatch, tmp_path):
                 start=chunk_offset,
                 end=chunk_offset + 1,
             )
-        ]
+        ], UsageInfo(model=model)
 
     fake_audio_module = SimpleNamespace(
         AudioRecorder=FakeRecorder,

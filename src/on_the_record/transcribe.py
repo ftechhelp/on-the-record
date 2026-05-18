@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from openai import OpenAI, APIError, APIConnectionError, RateLimitError
 
@@ -18,6 +18,14 @@ logger = logging.getLogger("on_the_record.transcribe")
 _RETRIABLE = (APIConnectionError, RateLimitError)
 _MAX_RETRIES = 3
 _INITIAL_BACKOFF = 1.0  # seconds
+
+# Pricing per 1M tokens (input, output) by model prefix.
+# Verified against OpenAI pricing page as of 2025-05.
+_MODEL_PRICING: dict[str, tuple[float, float]] = {
+    "gpt-4o-transcribe-diarize": (2.50, 10.00),
+    "gpt-4o-transcribe": (2.50, 10.00),
+    "gpt-4o-mini-transcribe": (1.25, 5.00),
+}
 
 
 @dataclass
@@ -30,13 +38,40 @@ class TranscriptSegment:
     end: float  # seconds
 
 
+@dataclass
+class UsageInfo:
+    """Token usage and estimated cost for one transcription call."""
+
+    model: str
+    input_tokens: int = 0
+    output_tokens: int = 0
+
+    @property
+    def cost_usd(self) -> float:
+        """Estimated cost in USD based on known model pricing."""
+        price_per_1m = _MODEL_PRICING.get(self.model)
+        if price_per_1m is None:
+            # Fall back to gpt-4o-transcribe pricing for unknown models
+            price_per_1m = _MODEL_PRICING["gpt-4o-transcribe"]
+        input_cost = self.input_tokens / 1_000_000 * price_per_1m[0]
+        output_cost = self.output_tokens / 1_000_000 * price_per_1m[1]
+        return input_cost + output_cost
+
+    def __add__(self, other: "UsageInfo") -> "UsageInfo":
+        return UsageInfo(
+            model=self.model,
+            input_tokens=self.input_tokens + other.input_tokens,
+            output_tokens=self.output_tokens + other.output_tokens,
+        )
+
+
 def transcribe_chunk(
     wav_bytes: bytes,
     *,
     api_key: str,
     model: str = "gpt-4o-transcribe-diarize",
     chunk_offset: float = 0.0,
-) -> list[TranscriptSegment]:
+) -> tuple[list[TranscriptSegment], UsageInfo]:
     """Transcribe a WAV audio chunk via the OpenAI API.
 
     Parameters
@@ -56,8 +91,9 @@ def transcribe_chunk(
 
     Returns
     -------
-    list[TranscriptSegment]
-        Parsed transcript segments with speaker labels and timestamps.
+    tuple[list[TranscriptSegment], UsageInfo]
+        Parsed transcript segments with speaker labels/timestamps, and
+        token usage with estimated cost for this API call.
     """
     client = OpenAI(api_key=api_key)
 
@@ -109,6 +145,14 @@ def transcribe_chunk(
         logger.error("All %d API attempts failed.", _MAX_RETRIES)
         raise last_exc  # type: ignore[misc]
 
+    # Extract token usage from the response if the API provides it.
+    raw_usage = getattr(result, "usage", None)
+    usage = UsageInfo(
+        model=model,
+        input_tokens=int(getattr(raw_usage, "input_tokens", 0) or 0),
+        output_tokens=int(getattr(raw_usage, "output_tokens", 0) or 0),
+    )
+
     # Parse the response into TranscriptSegment objects.
     if use_diarize:
         segments = _parse_diarized(result, chunk_offset)
@@ -116,11 +160,14 @@ def transcribe_chunk(
         segments = _parse_verbose(result, chunk_offset)
 
     logger.info(
-        "Transcribed %d segment(s) from chunk at offset %.1f s",
+        "Transcribed %d segment(s) from chunk at offset %.1f s (tokens: %d in / %d out, ~$%.4f)",
         len(segments),
         chunk_offset,
+        usage.input_tokens,
+        usage.output_tokens,
+        usage.cost_usd,
     )
-    return segments
+    return segments, usage
 
 
 def _parse_diarized(result, offset: float) -> list[TranscriptSegment]:
