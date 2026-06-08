@@ -311,6 +311,28 @@ The output is `dist/on-the-record.exe`.
 
 If a root `.env` exists during the build, it is bundled into the executable and those bundled values take precedence when the executable runs. Rebuild after changing embedded values, and treat the executable as containing those secrets.
 
+## Windows Tray App
+
+The Windows counterpart to the macOS menu bar app is a Python system tray app (`on-the-record-tray`). It shows a tray icon with **Start Recording**, **Stop Recording**, **Settings…**, **List Devices**, **Open Last Transcript**, and **Quit**. The recording engine runs in-process — no separate process or terminal window.
+
+API keys are stored in **Windows Credential Manager** (via `keyring`), and non-secret options (output folder, format, audio source, chunk size, diarization, study docs, Gemini model) are saved to `%APPDATA%\On The Record\settings.json`. Open **Settings…** to enter your OpenAI key (and optionally a Gemini key for study documents).
+
+Run it from a checkout:
+
+```bash
+uv run on-the-record-tray
+```
+
+Build a windowed executable and an installer (run on Windows):
+
+```bash
+uv sync --group build
+uv run python scripts/build_windows_tray.py      # -> dist\On The Record.exe
+powershell -File scripts\build_windows_installer.ps1   # -> dist\installer\OnTheRecord-Setup-<version>.exe
+```
+
+The installer ([Inno Setup](https://jrsoftware.org/isdl.php), `iscc.exe` must be on PATH) adds a Start Menu shortcut and an uninstaller. The exe is unsigned, so expect a SmartScreen prompt on first run.
+
 ## Development
 
 ```bash
