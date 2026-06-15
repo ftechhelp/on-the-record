@@ -364,6 +364,58 @@ def _cmd_start(args: argparse.Namespace) -> None:
 
 
 # ---------------------------------------------------------------------------
+# ``study`` command
+# ---------------------------------------------------------------------------
+
+
+def _cmd_study(args: argparse.Namespace) -> None:
+    """Generate a study document for an existing transcript, then export to Obsidian.
+
+    A manual fallback for when the post-recording study step did not run (or was
+    disabled). It mirrors the post-recording path: Gemini study document, then an
+    Obsidian copy when a vault is configured.
+    """
+    transcript_path = Path(args.transcript)
+    if not transcript_path.is_file():
+        print(f"Error: transcript not found: {transcript_path}", file=sys.stderr)
+        sys.exit(1)
+
+    gemini_api_key = load_gemini_api_key()
+    if gemini_api_key is None:
+        print(
+            "Error: GEMINI_API_KEY is not set; cannot generate a study document.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    study_path = Path(args.study_output) if args.study_output else None
+    if study_path:
+        logger.info("Generating Gemini study document: %s", study_path)
+    else:
+        logger.info("Generating Gemini study document with a Gemini title.")
+
+    try:
+        written_path = write_named_study_document(
+            str(transcript_path),
+            study_path,
+            api_key=gemini_api_key,
+            model=args.gemini_model,
+        )
+    except Exception as exc:
+        print(f"Error: study document generation failed: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"Study document written to {written_path}")
+    _maybe_export_study_document_to_obsidian(
+        written_path,
+        enabled=getattr(args, "obsidian", None),
+        vault_path=getattr(args, "obsidian_vault", None),
+        study_folder=getattr(args, "obsidian_folder", None),
+        cli_command=getattr(args, "obsidian_cli_command", None),
+    )
+
+
+# ---------------------------------------------------------------------------
 # ``config obsidian`` command
 # ---------------------------------------------------------------------------
 
@@ -716,6 +768,54 @@ def _build_parser() -> argparse.ArgumentParser:
         help="External command to run after Obsidian export. {file} and {vault} are supported.",
     )
     start.set_defaults(func=_cmd_start)
+
+    # -- study ---------------------------------------------------------------
+    study = sub.add_parser(
+        "study",
+        help="Generate a Gemini study document from an existing transcript.",
+    )
+    study.add_argument(
+        "transcript",
+        help="Path to a transcript file (txt/md/json) to summarize.",
+    )
+    study.add_argument(
+        "--study-output",
+        default=None,
+        help="Study document output path. Defaults to a Gemini-titled Markdown file.",
+    )
+    study.add_argument(
+        "--gemini-model",
+        default=DEFAULT_GEMINI_MODEL,
+        help=f"Gemini model for study document generation (default: {DEFAULT_GEMINI_MODEL}).",
+    )
+    study.add_argument(
+        "--obsidian",
+        action="store_true",
+        default=None,
+        help="Export the study document to the configured Obsidian vault.",
+    )
+    study.add_argument(
+        "--no-obsidian",
+        action="store_false",
+        dest="obsidian",
+        help="Disable Obsidian export for this run.",
+    )
+    study.add_argument(
+        "--obsidian-vault",
+        default=None,
+        help="Obsidian vault path for this run, overriding saved config.",
+    )
+    study.add_argument(
+        "--obsidian-folder",
+        default=None,
+        help="Vault-relative folder for this run's study document.",
+    )
+    study.add_argument(
+        "--obsidian-cli-command",
+        default=None,
+        help="External command to run after Obsidian export. {file} and {vault} are supported.",
+    )
+    study.set_defaults(func=_cmd_study)
 
     # -- config --------------------------------------------------------------
     config_parser = sub.add_parser("config", help="Manage persistent settings.")

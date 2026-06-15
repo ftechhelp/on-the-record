@@ -266,10 +266,27 @@ class RecordingController:
         # Same guards as JsonLineEngine._maybe_generate_study_document.
         if not options["enabled"] or result.total_segments == 0 or not options["api_key"]:
             return
-        self._on_event("study_doc_started", {"transcript_path": result.output_path})
+        self.generate_study_document(result.output_path, options)
+
+    def generate_study_document(
+        self, transcript_path: str, options: dict[str, Any]
+    ) -> None:
+        """Generate a study document for *transcript_path*, then export to Obsidian.
+
+        Shared by the post-recording flow and the manual "Generate Study
+        Document…" menu action, so a transcript can be turned into a note even
+        when the automatic step did not run. Safe to call from any thread — it
+        only emits events.
+        """
+        if not options["api_key"]:
+            self._on_event(
+                "study_doc_failed", {"error": "Gemini API key is not set."}
+            )
+            return
+        self._on_event("study_doc_started", {"transcript_path": transcript_path})
         try:
             written = write_named_study_document(
-                result.output_path,
+                transcript_path,
                 options["output_path"],
                 api_key=options["api_key"],
                 model=options["model"],
@@ -374,6 +391,7 @@ class TrayApp:
             Item("Settings…", self._on_settings),
             Item("List Devices", self._on_list_devices),
             Item("Open Last Transcript", self._on_open_last, enabled=lambda _item: bool(self.controller.last_output_path)),
+            Item("Generate Study Document…", self._on_generate_study),
             pystray.Menu.SEPARATOR,
             Item("Quit", self._on_quit),
         )
@@ -479,6 +497,9 @@ class TrayApp:
         else:
             self._notify("No transcript available yet.")
 
+    def _on_generate_study(self, _icon=None, _item=None) -> None:
+        self._ui(self._prompt_and_generate_study)
+
     def _on_quit(self, _icon=None, _item=None) -> None:
         self.controller.stop()
         self.icon.stop()
@@ -500,6 +521,47 @@ class TrayApp:
             f"{'[loopback] ' if d.is_loopback else ''}{d.name}" for d in devices
         ] or ["No audio devices found."]
         messagebox.showinfo(f"{APP_NAME} — Audio Devices", "\n".join(lines))
+
+    def _prompt_and_generate_study(self) -> None:
+        """Pick a transcript (Tk thread), then generate its study document.
+
+        The Gemini call is network-bound, so it runs on a daemon thread to keep
+        the Tk loop responsive; progress and results surface as notifications via
+        the controller's event callback. Obsidian export follows automatically
+        when a vault is configured.
+        """
+        from tkinter import filedialog
+
+        path = filedialog.askopenfilename(
+            title="Select a transcript",
+            initialdir=self.settings.output_directory or str(Path.home()),
+            filetypes=[
+                ("Transcripts", "*.txt *.md *.json"),
+                ("All files", "*.*"),
+            ],
+        )
+        if not path:
+            return
+
+        gemini_key = effective_secret(GEMINI_ACCOUNT)
+        if not gemini_key:
+            self._notify("Set your Gemini API key in Settings to generate study documents.")
+            self._open_settings_window()
+            return
+
+        options = {
+            "enabled": True,
+            "api_key": gemini_key,
+            "model": self.settings.gemini_model,
+            "output_path": None,
+        }
+        self._notify("Generating study document…")
+        threading.Thread(
+            target=self.controller.generate_study_document,
+            args=(path, options),
+            name="tray-study-doc",
+            daemon=True,
+        ).start()
 
     def _open_settings_window(self) -> None:
         if self._settings_window is not None and self._settings_window.exists():

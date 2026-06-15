@@ -559,6 +559,82 @@ def test_start_exports_study_document_to_obsidian(monkeypatch, tmp_path):
     assert exported["config"].study_folder == "OTR"
 
 
+def _make_study_args(transcript: str, **overrides):
+    args = SimpleNamespace(
+        transcript=transcript,
+        study_output=None,
+        gemini_model="gemini-2.5-flash",
+        obsidian=None,
+        obsidian_vault=None,
+        obsidian_folder=None,
+        obsidian_cli_command=None,
+    )
+    for key, value in overrides.items():
+        setattr(args, key, value)
+    return args
+
+
+def test_study_command_generates_and_exports(monkeypatch, tmp_path):
+    transcript = tmp_path / "transcript.txt"
+    transcript.write_text("hello", encoding="utf-8")
+    written_study = tmp_path / "2026-05-01-topic.md"
+    generated = {}
+    exported = {}
+
+    monkeypatch.setattr(cli, "load_gemini_api_key", lambda: "gemini-key")
+
+    def fake_write_study_document(transcript_path, output_path, *, api_key, model):
+        generated["transcript_path"] = transcript_path
+        generated["output_path"] = output_path
+        generated["api_key"] = api_key
+        generated["model"] = model
+        return written_study
+
+    monkeypatch.setattr(cli, "write_named_study_document", fake_write_study_document)
+    monkeypatch.setattr(
+        cli,
+        "load_obsidian_config",
+        lambda: ObsidianConfig(vault_path=tmp_path / "Vault", study_folder="OTR"),
+    )
+
+    def fake_export(study_path, config):
+        exported["study_path"] = study_path
+        return tmp_path / "Vault" / "OTR" / "2026-05-01-topic.md"
+
+    monkeypatch.setattr(cli, "export_study_document_to_obsidian", fake_export)
+
+    cli._cmd_study(_make_study_args(str(transcript)))
+
+    assert generated == {
+        "transcript_path": str(transcript),
+        "output_path": None,
+        "api_key": "gemini-key",
+        "model": "gemini-2.5-flash",
+    }
+    assert exported["study_path"] == written_study
+
+
+def test_study_command_exits_when_transcript_missing(monkeypatch, tmp_path):
+    monkeypatch.setattr(cli, "load_gemini_api_key", lambda: "gemini-key")
+
+    with pytest.raises(SystemExit):
+        cli._cmd_study(_make_study_args(str(tmp_path / "missing.txt")))
+
+
+def test_study_command_exits_without_gemini_key(monkeypatch, tmp_path):
+    transcript = tmp_path / "transcript.txt"
+    transcript.write_text("hello", encoding="utf-8")
+    monkeypatch.setattr(cli, "load_gemini_api_key", lambda: None)
+
+    def fail_write(*args, **kwargs):
+        raise AssertionError("study document should not be generated without a key")
+
+    monkeypatch.setattr(cli, "write_named_study_document", fail_write)
+
+    with pytest.raises(SystemExit):
+        cli._cmd_study(_make_study_args(str(transcript)))
+
+
 def test_config_obsidian_show_without_config(monkeypatch, capsys, tmp_path):
     monkeypatch.setattr(cli, "load_obsidian_config", lambda: None)
     monkeypatch.setattr(cli, "config_file_path", lambda: tmp_path / "config.json")
