@@ -218,11 +218,17 @@ class RecordingController:
         self._on_event = on_event
         self._session: RecordingSession | None = None
         self._thread: threading.Thread | None = None
+        self._stop_requested = False
         self.last_output_path: str | None = None
 
     @property
     def is_recording(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
+
+    @property
+    def stop_requested(self) -> bool:
+        """True once a stop has been asked for but recording is still winding down."""
+        return self._stop_requested and self.is_recording
 
     def start(self, payload: dict[str, Any], study_options: dict[str, Any]) -> None:
         if self.is_recording:
@@ -230,6 +236,7 @@ class RecordingController:
         config = build_config(payload)  # raises ValueError if the key is missing
         session = RecordingSession(config, event_callback=self._on_event)
         self._session = session
+        self._stop_requested = False
         self.last_output_path = config.output_path
         self._thread = threading.Thread(
             target=self._run,
@@ -240,6 +247,7 @@ class RecordingController:
         self._thread.start()
 
     def stop(self) -> None:
+        self._stop_requested = True
         if self._session is not None:
             self._session.request_stop()
 
@@ -383,9 +391,9 @@ class TrayApp:
                 default=True,
             ),
             Item(
-                "Stop Recording",
+                lambda _item: "Stopping…" if self.controller.stop_requested else "Stop Recording",
                 self._on_stop,
-                enabled=lambda _item: self.controller.is_recording,
+                enabled=lambda _item: self.controller.is_recording and not self.controller.stop_requested,
             ),
             pystray.Menu.SEPARATOR,
             Item("Settings…", self._on_settings),
@@ -430,6 +438,23 @@ class TrayApp:
         except Exception:
             pass
 
+    def _show_error(self, message: str) -> None:
+        """Surface an error in a modal dialog instead of a transient balloon.
+
+        Balloon notifications show one at a time, so a failure message can be
+        clobbered by the "Recording stopped" balloon that follows it before the
+        user notices. A dialog stays up until dismissed. Safe to call from any
+        thread — it logs immediately and marshals the dialog onto the Tk thread.
+        """
+        _log(f"error shown to user: {message}")
+
+        def show() -> None:
+            from tkinter import messagebox
+
+            messagebox.showerror(APP_NAME, message)
+
+        self._ui(show)
+
     def _refresh(self, recording: bool | None = None) -> None:
         if recording is not None:
             self.icon.icon = create_icon_image(recording=recording)
@@ -448,15 +473,21 @@ class TrayApp:
             self._notify(f"Recording stopped — {segments} segment(s) written.")
         elif event_type == "recording_error":
             self._refresh(recording=False)
-            self._notify(f"Recording error: {payload.get('error', 'unknown')}")
+            self._show_error(f"Recording failed:\n\n{payload.get('error', 'unknown')}")
+        elif event_type == "study_doc_started":
+            self._notify("Creating study document with Gemini…")
         elif event_type == "study_doc_written":
             self._notify("Study document written.")
         elif event_type == "study_doc_failed":
-            self._notify(f"Study document failed: {payload.get('error', 'unknown')}")
+            self._show_error(
+                f"Study document generation failed:\n\n{payload.get('error', 'unknown')}"
+            )
         elif event_type == "obsidian_exported":
             self._notify("Study document exported to Obsidian.")
         elif event_type == "obsidian_export_failed":
-            self._notify(f"Obsidian export failed: {payload.get('error', 'unknown')}")
+            self._show_error(
+                f"Obsidian export failed:\n\n{payload.get('error', 'unknown')}"
+            )
 
     # -- menu callbacks (run on the pystray thread) -------------------------- #
 
@@ -478,7 +509,14 @@ class TrayApp:
             self._refresh()
 
     def _on_stop(self, _icon=None, _item=None) -> None:
+        if not self.controller.is_recording or self.controller.stop_requested:
+            return
         self.controller.stop()
+        # Capture stops within ~1s, but the final chunk still has to be
+        # transcribed — tell the user the command registered so it doesn't feel
+        # stuck. "recording_finished" resets the title when it actually ends.
+        self.icon.title = f"{APP_NAME} — Stopping…"
+        self._notify("Stopping — finishing the current chunk…")
         self._refresh()
 
     def _on_settings(self, _icon=None, _item=None) -> None:
@@ -555,7 +593,7 @@ class TrayApp:
             "model": self.settings.gemini_model,
             "output_path": None,
         }
-        self._notify("Generating study document…")
+        # generate_study_document emits "study_doc_started", which notifies.
         threading.Thread(
             target=self.controller.generate_study_document,
             args=(path, options),

@@ -347,6 +347,8 @@ The Windows counterpart to the macOS menu bar app is a Python system tray app (`
 
 **Generate Study Document…** lets you pick an existing transcript and turn it into a Gemini study document on demand — a manual fallback for when the automatic post-recording step did not run. It also copies the note into Obsidian when a vault is configured in **Settings…**.
 
+When you choose **Stop Recording**, capture stops within about a second; the menu item shows **Stopping…** and a notification confirms the command registered while the final chunk is transcribed. The app notifies you when a study document starts generating and after it is written, and surfaces a dialog if recording, study-document generation, or Obsidian export fails (so the message isn't lost behind later notifications).
+
 API keys are stored in **Windows Credential Manager** (via `keyring`), and non-secret options (output folder, format, audio source, chunk size, diarization, study docs, Gemini model) are saved to `%APPDATA%\On The Record\settings.json`. Open **Settings…** to enter your OpenAI key (and optionally a Gemini key for study documents).
 
 Run it from a checkout:
