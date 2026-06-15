@@ -473,6 +473,11 @@ def _source_description(
 # ---------------------------------------------------------------------------
 
 
+# Read each chunk in short blocks rather than one blocking full-chunk read, so a
+# stop request is noticed within a block instead of after a whole chunk.
+_CAPTURE_BLOCK_SECONDS = 1.0
+
+
 @dataclass
 class AudioChunk:
     """A chunk of captured audio."""
@@ -545,6 +550,40 @@ class AudioRecorder:
         else:
             yield from self._record_soundcard()
 
+    def _read_concurrent_chunk(
+        self,
+        make_readers: Callable[[int], dict[str, Callable[[], np.ndarray]]],
+        num_frames: int,
+    ) -> dict[str, np.ndarray]:
+        """Read *num_frames* per source in short blocks, honoring the stop flag.
+
+        Reading in ``_CAPTURE_BLOCK_SECONDS`` blocks (instead of one blocking
+        full-chunk read) lets :meth:`stop` take effect within a block rather than
+        after a whole chunk. On stop this returns the audio captured so far — a
+        partial chunk — which the caller still transcribes before finishing, so
+        no captured speech is dropped.
+        """
+        block_frames = max(1, int(self.sample_rate * _CAPTURE_BLOCK_SECONDS))
+        collected: dict[str, list[np.ndarray]] = {}
+        remaining = num_frames
+
+        while remaining > 0 and not self._stop_event.is_set():
+            block = min(block_frames, remaining)
+            try:
+                recordings = _record_sources_concurrently(make_readers(block))
+            except Exception:
+                if self._stop_event.is_set():
+                    break
+                raise
+            for name, data in recordings.items():
+                collected.setdefault(name, []).append(data)
+            remaining -= block
+
+        return {
+            name: np.concatenate(parts) if parts else np.zeros(0, dtype=np.float32)
+            for name, parts in collected.items()
+        }
+
     def _record_screencapturekit(self) -> Generator[AudioChunk, None, None]:
         """Record using ScreenCaptureKit (macOS 13+)."""
         num_samples = self.sample_rate * self.chunk_seconds
@@ -578,23 +617,21 @@ class AudioRecorder:
                     )
                 )
 
-            while not self._stop_event.is_set():
+            def make_readers(frames: int) -> dict[str, Callable[[], np.ndarray]]:
                 readers: dict[str, Callable[[], np.ndarray]] = {
-                    "system": lambda: sck_recorder.read_chunk(num_samples),
+                    "system": lambda: sck_recorder.read_chunk(frames),
                 }
                 if microphone_recorder is not None:
                     readers["microphone"] = lambda: microphone_recorder.record(
-                        numframes=num_samples
+                        numframes=frames
                     )
+                return readers
 
-                try:
-                    recordings = _record_sources_concurrently(readers)
-                except Exception:
-                    if self._stop_event.is_set():
-                        break
-                    raise
-
+            while not self._stop_event.is_set():
+                recordings = self._read_concurrent_chunk(make_readers, num_samples)
                 audio = _mix_audio_sources(*recordings.values())
+                if audio.size == 0:
+                    break  # stop requested before any audio was captured
 
                 rms = float(np.sqrt(np.mean(audio.astype(np.float64) ** 2)))
                 peak = float(np.max(np.abs(audio)))
@@ -670,25 +707,23 @@ class AudioRecorder:
                     )
                 )
 
-            while not self._stop_event.is_set():
+            def make_readers(frames: int) -> dict[str, Callable[[], np.ndarray]]:
                 readers: dict[str, Callable[[], np.ndarray]] = {}
                 if system_recorder is not None:
                     readers["system"] = lambda: system_recorder.record(
-                        numframes=num_frames
+                        numframes=frames
                     )
                 if microphone_recorder is not None:
                     readers["microphone"] = lambda: microphone_recorder.record(
-                        numframes=num_frames
+                        numframes=frames
                     )
+                return readers
 
-                try:
-                    recordings = _record_sources_concurrently(readers)
-                except Exception:
-                    if self._stop_event.is_set():
-                        break
-                    raise
-
+            while not self._stop_event.is_set():
+                recordings = self._read_concurrent_chunk(make_readers, num_frames)
                 audio = _mix_audio_sources(*recordings.values())
+                if audio.size == 0:
+                    break  # stop requested before any audio was captured
 
                 rms = float(np.sqrt(np.mean(audio.astype(np.float64) ** 2)))
                 peak = float(np.max(np.abs(audio)))

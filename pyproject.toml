@@ -12,11 +12,15 @@ dependencies = [
     "pyobjc-framework-ScreenCaptureKit>=10.0; sys_platform == 'darwin'",
     "pyobjc-framework-CoreMedia>=10.0; sys_platform == 'darwin'",
     "pyobjc-framework-Quartz>=10.0; sys_platform == 'darwin'",
+    "pystray>=0.19; sys_platform == 'win32'",
+    "pillow>=10.0; sys_platform == 'win32'",
+    "keyring>=24.0; sys_platform == 'win32'",
 ]
 
 [project.scripts]
 on-the-record = "on_the_record.cli:main"
 on-the-record-engine = "on_the_record.app_engine:main"
+on-the-record-tray = "on_the_record.tray:main"
 
 [build-system]
 requires = ["hatchling"]

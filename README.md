@@ -178,6 +178,20 @@ uv run on-the-record start --study-output ./notes/study.md
 
 The default Gemini model is `gemini-3-flash-preview`.
 
+### Generate a study document manually
+
+If the automatic step did not run (or was disabled), turn an existing transcript into a study document at any time. This also copies the note into Obsidian when a vault is configured, just like the post-recording step:
+
+```bash
+uv run on-the-record study ./transcript_20260501_120000.txt
+
+# Choose the output path or model, or override Obsidian export per run
+uv run on-the-record study ./transcript.txt --study-output ./notes/study.md
+uv run on-the-record study ./transcript.txt --no-obsidian
+```
+
+In the Windows tray app, use **Generate Study Document…** and pick a transcript file to do the same.
+
 ## Obsidian Export
 
 Configure a vault once:
@@ -228,6 +242,22 @@ Options:
   --no-diarize                 Disable speaker diarization
   --study-doc                  Generate a Gemini study document. Default when GEMINI_API_KEY is set
   --no-study-doc               Disable Gemini study documents
+  --study-output PATH          Study document path. Defaults to a Gemini-titled Markdown file
+  --gemini-model MODEL         Gemini model. Default: gemini-3-flash-preview
+  --obsidian                   Export the study document to the configured Obsidian vault
+  --no-obsidian                Disable Obsidian export for this run
+  --obsidian-vault PATH        Override the saved vault path for this run
+  --obsidian-folder PATH       Override the saved vault-relative folder for this run
+  --obsidian-cli-command CMD   Override the post-export CLI hook for this run
+```
+
+```text
+on-the-record study TRANSCRIPT [OPTIONS]
+
+Generate a Gemini study document from an existing transcript, then export to
+Obsidian when a vault is configured.
+
+Options:
   --study-output PATH          Study document path. Defaults to a Gemini-titled Markdown file
   --gemini-model MODEL         Gemini model. Default: gemini-3-flash-preview
   --obsidian                   Export the study document to the configured Obsidian vault
@@ -310,6 +340,32 @@ uv run python scripts/build_windows_exe.py
 The output is `dist/on-the-record.exe`.
 
 If a root `.env` exists during the build, it is bundled into the executable and those bundled values take precedence when the executable runs. Rebuild after changing embedded values, and treat the executable as containing those secrets.
+
+## Windows Tray App
+
+The Windows counterpart to the macOS menu bar app is a Python system tray app (`on-the-record-tray`). It shows a tray icon with **Start Recording**, **Stop Recording**, **Settings…**, **List Devices**, **Open Last Transcript**, **Generate Study Document…**, and **Quit**. The recording engine runs in-process — no separate process or terminal window.
+
+**Generate Study Document…** lets you pick an existing transcript and turn it into a Gemini study document on demand — a manual fallback for when the automatic post-recording step did not run. It also copies the note into Obsidian when a vault is configured in **Settings…**.
+
+When you choose **Stop Recording**, capture stops within about a second; the menu item shows **Stopping…** and a notification confirms the command registered while the final chunk is transcribed. The app notifies you when a study document starts generating and after it is written, and surfaces a dialog if recording, study-document generation, or Obsidian export fails (so the message isn't lost behind later notifications).
+
+API keys are stored in **Windows Credential Manager** (via `keyring`), and non-secret options (output folder, format, audio source, chunk size, diarization, study docs, Gemini model) are saved to `%APPDATA%\On The Record\settings.json`. Open **Settings…** to enter your OpenAI key (and optionally a Gemini key for study documents).
+
+Run it from a checkout:
+
+```bash
+uv run on-the-record-tray
+```
+
+Build a windowed executable and an installer (run on Windows):
+
+```bash
+uv sync --group build
+uv run python scripts/build_windows_tray.py      # -> dist\On The Record.exe
+powershell -File scripts\build_windows_installer.ps1   # -> dist\installer\OnTheRecord-Setup-<version>.exe
+```
+
+The installer ([Inno Setup](https://jrsoftware.org/isdl.php), `iscc.exe` must be on PATH) adds a Start Menu shortcut and an uninstaller. The exe is unsigned, so expect a SmartScreen prompt on first run.
 
 ## Development
 
